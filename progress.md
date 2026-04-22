@@ -5,7 +5,7 @@
 - CREATE VIEW / DROP VIEW command
 - JOINs
 - UNION, UNION ALL, INTERSECT, EXCEPT
-- IS NULL, IS NOT NULL (whole null-semantics)
+- Further NULL semantics alignment beyond the basic literal/predicate support
 - Further align operator semantics with SQL standard beyond the implemented keyword operators
   - Standardize remaining non-SQL operators / aliases and edge-case semantics
 - All missing aggregate functions:
@@ -49,3 +49,7 @@
 - Quantified predicate subqueries:
   - = ANY (SELECT ...)
   - <, <=, >, >=, != with ANY/ALL
+- Basic NULL support:
+  - NULL literal
+  - IS NULL
+  - IS NOT NULL

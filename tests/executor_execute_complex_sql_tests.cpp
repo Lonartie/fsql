@@ -351,5 +351,36 @@ TEST_CASE("uses ANY and ALL quantified subqueries in a larger escalation workflo
     CHECK(text.find("2 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("uses NULL values in a larger archival workflow")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (id, title, archived_at, owner, closed_at);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (1, 'Patch release', NULL, 'ops', NULL);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (2, 'Write docs', '2026-04-01', 'docs', '2026-04-02');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (3, 'Rotate keys', NULL, 'sec', '2026-04-10');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (4, 'Renew cert', '', 'ops', NULL);"));
+
+    context.executor.execute(sql_test::parse_statement(
+        "UPDATE tasks SET archived_at = '2026-04-22' WHERE closed_at IS NOT NULL AND archived_at IS NULL;"));
+    context.executor.execute(sql_test::parse_statement(
+        "UPDATE tasks SET archived_at = NULL, closed_at = NULL WHERE title = 'Write docs';"));
+
+    const auto updated = context.storage->load_table("tasks");
+    REQUIRE_EQ(updated.rows.size(), 4U);
+
+    context.reset_output();
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title, archived_at FROM tasks WHERE archived_at IS NULL ORDER BY title;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Renew cert") == std::string::npos);
+    CHECK(text.find("Write docs") != std::string::npos);
+    CHECK(text.find("Rotate keys") == std::string::npos);
+    CHECK(text.find("NULL") != std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
 TEST_SUITE_END();
 

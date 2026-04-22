@@ -120,6 +120,22 @@ TEST_CASE("deletes matching rows with where")
     CHECK(context.output.str().find("Deleted 1 row(s) from 'todos'") != std::string::npos);
 }
 
+TEST_CASE("update can assign NULL values")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, archived_at);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk', '2026-04-22');"));
+    context.executor.execute(sql_test::parse_statement("UPDATE todos SET archived_at = NULL WHERE title = 'Buy milk';"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT title FROM todos WHERE archived_at IS NULL;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Buy milk") != std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
 TEST_CASE("deletes all rows without where")
 {
     sql_test::ExecutorContext context;

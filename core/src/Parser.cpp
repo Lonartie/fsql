@@ -605,6 +605,15 @@ namespace sql
                     expression = make_binary(BinaryOperator::GreaterEqual, expression, parse_additive());
                 }
             }
+            else if (match_keyword("IS"))
+            {
+                const bool negated = match_keyword("NOT");
+                if (!match_keyword("NULL"))
+                {
+                    fail("IS currently only supports NULL");
+                }
+                expression = make_binary(negated ? BinaryOperator::IsNot : BinaryOperator::Is, expression, make_null());
+            }
             else if (match_keyword("IN"))
             {
                 expect(TokenType::LParen, "Expected '(' after IN");
@@ -746,6 +755,11 @@ namespace sql
             return make_literal(advance().text);
         }
 
+        if (match_keyword("NULL"))
+        {
+            return make_null();
+        }
+
         if (check(TokenType::Identifier))
         {
             const std::string text = parse_identifier_reference("Expected identifier");
@@ -775,6 +789,13 @@ namespace sql
         auto expression = std::make_shared<Expression>();
         expression->kind = ExpressionKind::Literal;
         expression->text = std::move(text);
+        return expression;
+    }
+
+    ExpressionPtr Parser::make_null() const
+    {
+        auto expression = std::make_shared<Expression>();
+        expression->kind = ExpressionKind::Null;
         return expression;
     }
 

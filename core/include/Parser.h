@@ -128,6 +128,10 @@ namespace sql
         /// @return Expression node.
         ExpressionPtr make_literal(std::string text) const;
 
+        /// @brief Creates a NULL literal expression node.
+        /// @return Expression node.
+        ExpressionPtr make_null() const;
+
         /// @brief Creates an identifier expression node.
         /// @param text Identifier text.
         /// @return Expression node.

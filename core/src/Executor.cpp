@@ -28,7 +28,20 @@ namespace sql
             std::string text;
             bool numeric = false;
             double number = 0.0;
+            bool is_null = false;
         };
+
+        constexpr std::string_view null_storage_marker = "__CSV_SQL_NULL__";
+
+        bool is_stored_null(const std::string& value)
+        {
+            return value == null_storage_marker;
+        }
+
+        std::string visible_value_text(const std::string& value)
+        {
+            return is_stored_null(value) ? "NULL" : value;
+        }
 
         struct SelectResult
         {
@@ -106,6 +119,10 @@ namespace sql
 
         bool to_bool(const EvaluatedValue& value)
         {
+            if (value.is_null)
+            {
+                return false;
+            }
             if (value.numeric)
             {
                 return std::fabs(value.number) > 1e-9;
@@ -134,8 +151,18 @@ namespace sql
             return {format_number(value), true, value};
         }
 
+        EvaluatedValue make_null()
+        {
+            return {std::string(null_storage_marker), false, 0.0, true};
+        }
+
         EvaluatedValue make_text(std::string value)
         {
+            if (is_stored_null(value))
+            {
+                return make_null();
+            }
+
             double parsed = 0.0;
             if (try_parse_number(value, parsed))
             {
@@ -242,16 +269,40 @@ namespace sql
                 return make_text(left.text + right.text);
             case BinaryOperator::Subtract: return make_numeric((left.numeric ? left.number : std::stod(left.text)) - (right.numeric ? right.number : std::stod(right.text)));
             case BinaryOperator::Less:
+                if (left.is_null || right.is_null)
+                {
+                    return make_numeric(0.0);
+                }
                 return make_numeric(((left.numeric && right.numeric) ? (left.number < right.number) : (left.text < right.text)) ? 1.0 : 0.0);
             case BinaryOperator::LessEqual:
+                if (left.is_null || right.is_null)
+                {
+                    return make_numeric(0.0);
+                }
                 return make_numeric(((left.numeric && right.numeric) ? (left.number <= right.number) : (left.text <= right.text)) ? 1.0 : 0.0);
             case BinaryOperator::Greater:
+                if (left.is_null || right.is_null)
+                {
+                    return make_numeric(0.0);
+                }
                 return make_numeric(((left.numeric && right.numeric) ? (left.number > right.number) : (left.text > right.text)) ? 1.0 : 0.0);
             case BinaryOperator::GreaterEqual:
+                if (left.is_null || right.is_null)
+                {
+                    return make_numeric(0.0);
+                }
                 return make_numeric(((left.numeric && right.numeric) ? (left.number >= right.number) : (left.text >= right.text)) ? 1.0 : 0.0);
+            case BinaryOperator::Is:
+                return make_numeric((left.is_null && right.is_null) ? 1.0 : 0.0);
+            case BinaryOperator::IsNot:
+                return make_numeric((left.is_null && right.is_null) ? 0.0 : 1.0);
             case BinaryOperator::In:
                 fail("IN subqueries require dedicated evaluation");
             case BinaryOperator::Like:
+                if (left.is_null || right.is_null)
+                {
+                    return make_numeric(0.0);
+                }
                 return make_numeric(like_matches(left.text, right.text) ? 1.0 : 0.0);
             case BinaryOperator::Regexp:
                 try
@@ -263,8 +314,16 @@ namespace sql
                     fail("Invalid REGEXP pattern '" + right.text + "'");
                 }
             case BinaryOperator::Equal:
+                if (left.is_null || right.is_null)
+                {
+                    return make_numeric(0.0);
+                }
                 return make_numeric(((left.numeric && right.numeric) ? (std::fabs(left.number - right.number) < 1e-9) : (left.text == right.text)) ? 1.0 : 0.0);
             case BinaryOperator::NotEqual:
+                if (left.is_null || right.is_null)
+                {
+                    return make_numeric(0.0);
+                }
                 return make_numeric(((left.numeric && right.numeric) ? (std::fabs(left.number - right.number) >= 1e-9) : (left.text != right.text)) ? 1.0 : 0.0);
             case BinaryOperator::BitwiseAnd: return make_numeric(static_cast<double>(to_integer(left) & to_integer(right)));
             case BinaryOperator::BitwiseXor: return make_numeric(static_cast<double>(to_integer(left) ^ to_integer(right)));
@@ -445,6 +504,8 @@ namespace sql
                 }
                 return quote_string(expression->text);
             }
+            case ExpressionKind::Null:
+                return "NULL";
             case ExpressionKind::Identifier:
                 return expression->text;
             case ExpressionKind::Select:
@@ -507,6 +568,8 @@ namespace sql
                 case BinaryOperator::LessEqual: op = "<="; break;
                 case BinaryOperator::Greater: op = ">"; break;
                 case BinaryOperator::GreaterEqual: op = ">="; break;
+                case BinaryOperator::Is: op = "IS"; break;
+                case BinaryOperator::IsNot: op = "IS NOT"; break;
                 case BinaryOperator::In: op = "IN"; break;
                 case BinaryOperator::Like: op = "LIKE"; break;
                 case BinaryOperator::Regexp: op = "REGEXP"; break;
@@ -648,7 +711,7 @@ namespace sql
             output << '|';
             for (std::size_t i = 0; i < values.size(); ++i)
             {
-                output << ' ' << std::left << std::setw(static_cast<int>(widths[i])) << values[i] << ' ' << '|';
+                output << ' ' << std::left << std::setw(static_cast<int>(widths[i])) << visible_value_text(values[i]) << ' ' << '|';
             }
             output << '\n';
         }
@@ -682,6 +745,7 @@ namespace sql
             case ExpressionKind::Exists:
             case ExpressionKind::Select:
             case ExpressionKind::Literal:
+            case ExpressionKind::Null:
             case ExpressionKind::Identifier:
                 return false;
             }
@@ -691,6 +755,19 @@ namespace sql
 
         int compare_values(const EvaluatedValue& left, const EvaluatedValue& right)
         {
+            if (left.is_null && right.is_null)
+            {
+                return 0;
+            }
+            if (left.is_null)
+            {
+                return -1;
+            }
+            if (right.is_null)
+            {
+                return 1;
+            }
+
             if (left.numeric && right.numeric)
             {
                 if (left.number < right.number)
@@ -965,6 +1042,7 @@ namespace sql
                 return;
             case ExpressionKind::Select:
             case ExpressionKind::Literal:
+            case ExpressionKind::Null:
                 return;
             }
         }
@@ -997,6 +1075,7 @@ namespace sql
             switch (expression->kind)
             {
             case ExpressionKind::Literal:
+            case ExpressionKind::Null:
             case ExpressionKind::Exists:
             case ExpressionKind::Select:
                 return;
@@ -1045,6 +1124,8 @@ namespace sql
             {
             case ExpressionKind::Literal:
                 return make_text(expression->text);
+            case ExpressionKind::Null:
+                return make_null();
             case ExpressionKind::Identifier:
                 return evaluate_select_identifier(expression->text, table, row);
             case ExpressionKind::Select:
@@ -1142,7 +1223,7 @@ namespace sql
                 for (const auto* row : rows)
                 {
                     const auto value = evaluate_select_row_expression(expression->arguments[0], table, *row, storage);
-                    if (!value.text.empty())
+                    if (!value.is_null && !value.text.empty())
                     {
                         ++count;
                     }
@@ -1166,7 +1247,7 @@ namespace sql
                 for (const auto* row : rows)
                 {
                     const auto value = evaluate_select_row_expression(expression->arguments[0], table, *row, storage);
-                    if (value.text.empty())
+                    if (value.is_null || value.text.empty())
                     {
                         continue;
                     }
@@ -1186,7 +1267,7 @@ namespace sql
             for (const auto* row : rows)
             {
                 const auto value = evaluate_select_row_expression(expression->arguments[0], table, *row, storage);
-                if (value.text.empty())
+                if (value.is_null || value.text.empty())
                 {
                     continue;
                 }
@@ -1226,6 +1307,8 @@ namespace sql
             {
             case ExpressionKind::Literal:
                 return make_text(expression->text);
+            case ExpressionKind::Null:
+                return make_null();
             case ExpressionKind::Identifier:
                 return evaluate_select_identifier(expression->text, table, representative_row);
             case ExpressionKind::Select:
@@ -1499,13 +1582,23 @@ namespace sql
                 fail("IN subquery must return exactly one column");
             }
 
+            if (left.is_null)
+            {
+                return make_numeric(0.0);
+            }
+
             for (const auto& row : result.rows)
             {
                 if (row.empty())
                 {
                     continue;
                 }
-                if (compare_values(left, make_text(row[0])) == 0)
+                const auto candidate = make_text(row[0]);
+                if (candidate.is_null)
+                {
+                    continue;
+                }
+                if (compare_values(left, candidate) == 0)
                 {
                     return make_numeric(1.0);
                 }
@@ -1535,6 +1628,11 @@ namespace sql
                 fail("ANY/ALL subquery must return exactly one column");
             }
 
+            if (left.is_null)
+            {
+                return make_numeric(0.0);
+            }
+
             if (quantifier == SubqueryQuantifier::Any)
             {
                 for (const auto& row : result.rows)
@@ -1543,7 +1641,12 @@ namespace sql
                     {
                         continue;
                     }
-                    if (evaluate_quantified_comparison(compare_values(left, make_text(row[0])), op))
+                    const auto candidate = make_text(row[0]);
+                    if (candidate.is_null)
+                    {
+                        continue;
+                    }
+                    if (evaluate_quantified_comparison(compare_values(left, candidate), op))
                     {
                         return make_numeric(1.0);
                     }
@@ -1557,7 +1660,12 @@ namespace sql
                 {
                     continue;
                 }
-                if (!evaluate_quantified_comparison(compare_values(left, make_text(row[0])), op))
+                const auto candidate = make_text(row[0]);
+                if (candidate.is_null)
+                {
+                    continue;
+                }
+                if (!evaluate_quantified_comparison(compare_values(left, candidate), op))
                 {
                     return make_numeric(0.0);
                 }
@@ -1577,6 +1685,8 @@ namespace sql
             {
             case ExpressionKind::Literal:
                 return make_text(expression->text);
+            case ExpressionKind::Null:
+                return make_null();
             case ExpressionKind::Identifier:
             {
                 try
@@ -1835,7 +1945,7 @@ namespace sql
         {
             for (std::size_t i = 0; i < row.size(); ++i)
             {
-                widths[i] = std::max(widths[i], row[i].size());
+                widths[i] = std::max(widths[i], visible_value_text(row[i]).size());
             }
         }
 

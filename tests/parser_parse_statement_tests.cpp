@@ -223,6 +223,23 @@ TEST_CASE("parses ANY and ALL quantified subquery predicates inside WHERE clause
     CHECK_EQ(static_cast<int>(statement.select.where->right->subquery_quantifier), static_cast<int>(sql::SubqueryQuantifier::Any));
 }
 
+TEST_CASE("parses NULL literals and IS NULL predicates inside statements")
+{
+    const auto select_statement = sql_test::parse_statement("SELECT title FROM tasks WHERE archived_at IS NULL OR deleted_at IS NOT NULL;");
+
+    REQUIRE(select_statement.select.where != nullptr);
+    CHECK_EQ(static_cast<int>(select_statement.select.where->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalOr));
+    REQUIRE(select_statement.select.where->left != nullptr);
+    CHECK_EQ(static_cast<int>(select_statement.select.where->left->binary_operator), static_cast<int>(sql::BinaryOperator::Is));
+    REQUIRE(select_statement.select.where->right != nullptr);
+    CHECK_EQ(static_cast<int>(select_statement.select.where->right->binary_operator), static_cast<int>(sql::BinaryOperator::IsNot));
+
+    const auto insert_statement = sql_test::parse_statement("INSERT INTO tasks (title, archived_at) VALUES ('Patch release', NULL);");
+    REQUIRE_EQ(insert_statement.insert.values.size(), 2U);
+    REQUIRE(insert_statement.insert.values[1] != nullptr);
+    CHECK_EQ(static_cast<int>(insert_statement.insert.values[1]->kind), static_cast<int>(sql::ExpressionKind::Null));
+}
+
 TEST_CASE("rejects unsupported statements")
 {
     CHECK_THROWS_AS(sql_test::parse_statement("MERGE INTO todos;"), std::runtime_error);

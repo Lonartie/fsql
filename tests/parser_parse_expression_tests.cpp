@@ -101,5 +101,22 @@ TEST_CASE("parses ANY and ALL quantified subquery predicates")
     CHECK_EQ(static_cast<int>(expression->right->subquery_quantifier), static_cast<int>(sql::SubqueryQuantifier::Any));
 }
 
+TEST_CASE("parses NULL literals and IS NULL predicates")
+{
+    const auto expression = sql_test::parse_expression("value IS NULL OR NULL IS NOT NULL");
+
+    REQUIRE(expression != nullptr);
+    CHECK_EQ(static_cast<int>(expression->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(expression->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalOr));
+    REQUIRE(expression->left != nullptr);
+    CHECK_EQ(static_cast<int>(expression->left->binary_operator), static_cast<int>(sql::BinaryOperator::Is));
+    REQUIRE(expression->left->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->left->right->kind), static_cast<int>(sql::ExpressionKind::Null));
+    REQUIRE(expression->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->right->binary_operator), static_cast<int>(sql::BinaryOperator::IsNot));
+    REQUIRE(expression->right->left != nullptr);
+    CHECK_EQ(static_cast<int>(expression->right->left->kind), static_cast<int>(sql::ExpressionKind::Null));
+}
+
 TEST_SUITE_END();
 

@@ -283,6 +283,63 @@ TEST_CASE("rejects ANY and ALL subqueries returning multiple columns")
     CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks WHERE severity > ALL (SELECT value, label FROM thresholds);")), std::runtime_error);
 }
 
+TEST_CASE("supports NULL literals in projections and assignments")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, archived_at);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', NULL);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT title, archived_at, NULL FROM tasks;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("NULL") != std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("supports IS NULL and IS NOT NULL predicates")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, archived_at);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', NULL);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', '2026-04-22');"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks WHERE archived_at IS NULL;"));
+
+    const auto null_text = context.output.str();
+    CHECK(null_text.find("Patch release") != std::string::npos);
+    CHECK(null_text.find("Write docs") == std::string::npos);
+    CHECK(null_text.find("1 row(s) selected") != std::string::npos);
+
+    context.reset_output();
+    context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks WHERE archived_at IS NOT NULL;"));
+
+    const auto not_null_text = context.output.str();
+    CHECK(not_null_text.find("Write docs") != std::string::npos);
+    CHECK(not_null_text.find("Patch release") == std::string::npos);
+    CHECK(not_null_text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("distinguishes NULL from empty strings in IS NULL predicates")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, archived_at);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', NULL);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', '');"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks WHERE archived_at IS NULL;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Write docs") == std::string::npos);
+}
+
 TEST_CASE("supports SELECT subqueries in INSERT values")
 {
     sql_test::ExecutorContext context;

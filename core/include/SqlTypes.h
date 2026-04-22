@@ -74,6 +74,7 @@ namespace sql
     enum class ExpressionKind
     {
         Literal,
+        Null,
         Identifier,
         Select,
         Exists,
@@ -103,6 +104,8 @@ namespace sql
         LessEqual,
         Greater,
         GreaterEqual,
+        Is,
+        IsNot,
         In,
         Like,
         Regexp,
