@@ -204,10 +204,23 @@ namespace sql
     };
 
     /// @brief Parsed `SELECT` statement.
+    struct SelectOrderBy
+    {
+        /// @brief Expression used for ordering.
+        ExpressionPtr expression;
+
+        /// @brief Indicates descending order when `true`.
+        bool descending = false;
+    };
+
+    /// @brief Parsed `SELECT` statement.
     struct SelectStatement
     {
         /// @brief Target table name.
         std::string table_name;
+
+        /// @brief Indicates whether duplicate projected rows should be removed.
+        bool distinct = false;
 
         /// @brief Indicates whether `*` was used.
         bool select_all = false;
@@ -217,6 +230,15 @@ namespace sql
 
         /// @brief Optional filter expression.
         ExpressionPtr where;
+
+        /// @brief Optional ORDER BY terms.
+        std::vector<SelectOrderBy> order_by;
+
+        /// @brief Optional LIMIT clause.
+        std::optional<std::size_t> limit;
+
+        /// @brief Optional OFFSET clause.
+        std::optional<std::size_t> offset;
     };
 
     /// @brief Parsed `UPDATE` statement.

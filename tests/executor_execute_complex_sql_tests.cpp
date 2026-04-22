@@ -161,5 +161,40 @@ TEST_CASE("supports aggregate subqueries inside larger maintenance workflow")
     CHECK(text.find("1 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("combines distinct ordering and pagination in a larger review workflow")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE deployments (service, environment, risk, owner, status, retries);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO deployments VALUES ('billing', 'prod', 9, 'ops', 'pending', 1);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO deployments VALUES ('search', 'stage', 4, 'ops', 'pending', 2);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO deployments VALUES ('auth', 'prod', 7, 'sec', 'blocked', 0);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO deployments VALUES ('docs', 'prod', 2, 'docs', 'pending', 3);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO deployments VALUES ('cdn', 'prod', 9, 'ops', 'pending', 0);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO deployments VALUES ('auth', 'stage', 7, 'sec', 'pending', 2);"));
+
+    context.executor.execute(sql_test::parse_statement(
+        "UPDATE deployments SET status = 'priority' "
+        "WHERE environment = 'prod' && (risk + retries) >= 9;"));
+
+    const auto table = context.storage->load_table("deployments");
+    REQUIRE_EQ(table.rows.size(), 6U);
+    CHECK_EQ(table.rows[0][4], "priority");
+    CHECK_EQ(table.rows[4][4], "priority");
+
+    context.reset_output();
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT DISTINCT owner, status FROM deployments "
+        "WHERE (risk >= 4 && environment = 'prod') || retries > 1 "
+        "ORDER BY status DESC, owner ASC LIMIT 2 OFFSET 1;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("| docs  | pending |") != std::string::npos);
+    CHECK(text.find("| ops   | pending |") != std::string::npos);
+    CHECK(text.find("| sec   | pending |") == std::string::npos);
+    CHECK(text.find("| sec   | blocked |") == std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
 TEST_SUITE_END();
 

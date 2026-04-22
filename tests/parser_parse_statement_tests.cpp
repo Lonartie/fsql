@@ -92,6 +92,38 @@ TEST_CASE("parses aggregate select projections")
     CHECK(statement.select.where != nullptr);
 }
 
+TEST_CASE("parses select result shaping clauses")
+{
+    const auto statement = sql_test::parse_statement("SELECT DISTINCT category, priority + 1 FROM todos WHERE done = false ORDER BY category DESC, priority + 1 ASC LIMIT 5 OFFSET 2;");
+
+    CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
+    CHECK(statement.select.distinct);
+    CHECK_FALSE(statement.select.select_all);
+    REQUIRE_EQ(statement.select.projections.size(), 2U);
+    REQUIRE_EQ(statement.select.order_by.size(), 2U);
+    REQUIRE(statement.select.order_by[0].expression != nullptr);
+    CHECK_EQ(statement.select.order_by[0].expression->text, "category");
+    CHECK(statement.select.order_by[0].descending);
+    REQUIRE(statement.select.order_by[1].expression != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.order_by[1].expression->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_FALSE(statement.select.order_by[1].descending);
+    REQUIRE(statement.select.limit.has_value());
+    CHECK_EQ(*statement.select.limit, 5U);
+    REQUIRE(statement.select.offset.has_value());
+    CHECK_EQ(*statement.select.offset, 2U);
+}
+
+TEST_CASE("parses UNIQUE synonym for DISTINCT")
+{
+    const auto statement = sql_test::parse_statement("SELECT UNIQUE category FROM todos ORDER BY category;");
+
+    CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
+    CHECK(statement.select.distinct);
+    REQUIRE_EQ(statement.select.order_by.size(), 1U);
+    REQUIRE(statement.select.order_by[0].expression != nullptr);
+    CHECK_EQ(statement.select.order_by[0].expression->text, "category");
+}
+
 TEST_CASE("rejects unsupported statements")
 {
     CHECK_THROWS_AS(sql_test::parse_statement("MERGE INTO todos;"), std::runtime_error);

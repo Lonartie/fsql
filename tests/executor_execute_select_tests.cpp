@@ -88,6 +88,74 @@ TEST_CASE("pretty formats select output")
     CHECK(text.find("2 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("orders selected rows by multiple expressions")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, priority, effort);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Bravo', 5, 1);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Alpha', 5, 2);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Delta', 3, 9);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Charlie', 8, 1);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT title, priority FROM tasks ORDER BY priority DESC, title ASC;"));
+
+    const auto text = context.output.str();
+    const auto charlie = text.find("| Charlie |");
+    const auto alpha = text.find("| Alpha   |");
+    const auto bravo = text.find("| Bravo   |");
+    const auto delta = text.find("| Delta   |");
+    REQUIRE(charlie != std::string::npos);
+    REQUIRE(alpha != std::string::npos);
+    REQUIRE(bravo != std::string::npos);
+    REQUIRE(delta != std::string::npos);
+    CHECK(charlie < alpha);
+    CHECK(alpha < bravo);
+    CHECK(bravo < delta);
+    CHECK(text.find("4 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("select distinct removes duplicate projected rows")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, category, priority);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 'ops', 8);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Night watch', 'ops', 4);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 'docs', 3);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('API review', 'docs', 6);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT DISTINCT category FROM tasks ORDER BY category ASC;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("| docs     |") != std::string::npos);
+    CHECK(text.find("| ops      |") != std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("select applies offset and limit after ordering")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, priority);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('First', 9);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Second', 7);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Third', 5);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Fourth', 3);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT title, priority FROM tasks ORDER BY priority DESC LIMIT 2 OFFSET 1;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("| Second |") != std::string::npos);
+    CHECK(text.find("| Third  |") != std::string::npos);
+    CHECK(text.find("| First  |") == std::string::npos);
+    CHECK(text.find("| Fourth |") == std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
 TEST_CASE("supports typical aggregate functions on filtered rows")
 {
     sql_test::ExecutorContext context;

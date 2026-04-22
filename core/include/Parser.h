@@ -67,6 +67,10 @@ namespace sql
         /// @return Parsed expressions.
         std::vector<ExpressionPtr> parse_expression_list();
 
+        /// @brief Parses a comma-separated ORDER BY list.
+        /// @return Parsed ORDER BY terms.
+        std::vector<SelectOrderBy> parse_order_by_list();
+
         /// @brief Parses logical OR expressions.
         /// @return Parsed expression tree.
         ExpressionPtr parse_logical_or();
@@ -145,6 +149,11 @@ namespace sql
         /// @param right Right operand.
         /// @return Expression node.
         ExpressionPtr make_binary(BinaryOperator op, ExpressionPtr left, ExpressionPtr right) const;
+
+        /// @brief Parses a non-negative integer literal.
+        /// @param message Error message for invalid values.
+        /// @return Parsed integer value.
+        std::size_t parse_non_negative_integer(const std::string& message);
 
         /// @brief Consumes and returns an identifier.
         /// @param message Error message if the next token is not an identifier.

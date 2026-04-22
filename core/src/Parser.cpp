@@ -3,6 +3,7 @@
 #include "SqlError.h"
 #include "StringUtils.h"
 
+#include <limits>
 #include <utility>
 
 namespace sql
@@ -136,6 +137,11 @@ namespace sql
     SelectStatement Parser::parse_select_statement()
     {
         SelectStatement stmt;
+        if (match_keyword("DISTINCT") || match_keyword("UNIQUE"))
+        {
+            stmt.distinct = true;
+        }
+
         if (check(TokenType::Star))
         {
             advance();
@@ -151,6 +157,22 @@ namespace sql
         if (match_keyword("WHERE"))
         {
             stmt.where = parse_expression();
+        }
+
+        if (match_keyword("ORDER"))
+        {
+            expect_keyword("BY");
+            stmt.order_by = parse_order_by_list();
+        }
+
+        if (match_keyword("LIMIT"))
+        {
+            stmt.limit = parse_non_negative_integer("Expected non-negative integer after LIMIT");
+        }
+
+        if (match_keyword("OFFSET"))
+        {
+            stmt.offset = parse_non_negative_integer("Expected non-negative integer after OFFSET");
         }
 
         return stmt;
@@ -235,6 +257,30 @@ namespace sql
         while (consume_optional(TokenType::Comma))
         {
             values.push_back(parse_expression());
+        }
+        return values;
+    }
+
+    std::vector<SelectOrderBy> Parser::parse_order_by_list()
+    {
+        std::vector<SelectOrderBy> values;
+        while (true)
+        {
+            SelectOrderBy order_by;
+            order_by.expression = parse_expression();
+            if (match_keyword("DESC"))
+            {
+                order_by.descending = true;
+            }
+            else
+            {
+                match_keyword("ASC");
+            }
+            values.push_back(std::move(order_by));
+            if (!consume_optional(TokenType::Comma))
+            {
+                break;
+            }
         }
         return values;
     }
@@ -507,6 +553,34 @@ namespace sql
         expression->left = std::move(left);
         expression->right = std::move(right);
         return expression;
+    }
+
+    std::size_t Parser::parse_non_negative_integer(const std::string& message)
+    {
+        if (!check(TokenType::Number))
+        {
+            fail(message);
+        }
+
+        const auto token = advance();
+        if (!token.text.empty() && token.text.front() == '-')
+        {
+            fail(message);
+        }
+
+        try
+        {
+            const auto value = std::stoull(token.text);
+            if (value > std::numeric_limits<std::size_t>::max())
+            {
+                fail(message);
+            }
+            return static_cast<std::size_t>(value);
+        }
+        catch (const std::exception&)
+        {
+            fail(message);
+        }
     }
 
     std::string Parser::expect_identifier(const std::string& message)

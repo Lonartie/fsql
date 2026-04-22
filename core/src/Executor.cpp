@@ -33,6 +33,12 @@ namespace sql
             std::vector<Row> rows;
         };
 
+        struct ProjectedSelectRow
+        {
+            Row values;
+            std::vector<EvaluatedValue> order_values;
+        };
+
         struct ParsedColumnMetadata
         {
             std::string visible_name;
@@ -132,6 +138,10 @@ namespace sql
         {
             std::ostringstream stream;
             stream << "SELECT ";
+            if (statement.distinct)
+            {
+                stream << "DISTINCT ";
+            }
             if (statement.select_all)
             {
                 stream << '*';
@@ -153,6 +163,34 @@ namespace sql
             {
                 stream << " WHERE " << serialize_expression(statement.where);
             }
+
+            if (!statement.order_by.empty())
+            {
+                stream << " ORDER BY ";
+                for (std::size_t i = 0; i < statement.order_by.size(); ++i)
+                {
+                    if (i > 0)
+                    {
+                        stream << ", ";
+                    }
+                    stream << serialize_expression(statement.order_by[i].expression);
+                    if (statement.order_by[i].descending)
+                    {
+                        stream << " DESC";
+                    }
+                }
+            }
+
+            if (statement.limit.has_value())
+            {
+                stream << " LIMIT " << *statement.limit;
+            }
+
+            if (statement.offset.has_value())
+            {
+                stream << " OFFSET " << *statement.offset;
+            }
+
             return stream.str();
         }
 
@@ -397,6 +435,76 @@ namespace sql
             return false;
         }
 
+        int compare_values(const EvaluatedValue& left, const EvaluatedValue& right)
+        {
+            if (left.numeric && right.numeric)
+            {
+                if (left.number < right.number)
+                {
+                    return -1;
+                }
+                if (left.number > right.number)
+                {
+                    return 1;
+                }
+                return 0;
+            }
+
+            if (left.text < right.text)
+            {
+                return -1;
+            }
+            if (left.text > right.text)
+            {
+                return 1;
+            }
+            return 0;
+        }
+
+        void apply_select_modifiers(const SelectStatement& stmt, std::vector<ProjectedSelectRow>& rows)
+        {
+            if (!stmt.order_by.empty())
+            {
+                std::stable_sort(rows.begin(), rows.end(), [&stmt](const ProjectedSelectRow& left, const ProjectedSelectRow& right)
+                {
+                    for (std::size_t i = 0; i < stmt.order_by.size(); ++i)
+                    {
+                        const int comparison = compare_values(left.order_values[i], right.order_values[i]);
+                        if (comparison == 0)
+                        {
+                            continue;
+                        }
+                        return stmt.order_by[i].descending ? (comparison > 0) : (comparison < 0);
+                    }
+                    return false;
+                });
+            }
+
+            if (stmt.distinct)
+            {
+                rows.erase(std::unique(rows.begin(), rows.end(), [](const ProjectedSelectRow& left, const ProjectedSelectRow& right)
+                {
+                    return left.values == right.values;
+                }), rows.end());
+            }
+
+            const std::size_t offset = stmt.offset.value_or(0);
+            if (offset >= rows.size())
+            {
+                rows.clear();
+                return;
+            }
+            if (offset > 0)
+            {
+                rows.erase(rows.begin(), rows.begin() + static_cast<std::ptrdiff_t>(offset));
+            }
+
+            if (stmt.limit.has_value() && rows.size() > *stmt.limit)
+            {
+                rows.erase(rows.begin() + static_cast<std::ptrdiff_t>(*stmt.limit), rows.end());
+            }
+        }
+
         void validate_select_projection(const ExpressionPtr& expression, const Table& table, const IStorage& storage)
         {
             if (!expression)
@@ -560,6 +668,14 @@ namespace sql
             const Table table = storage.load_table(stmt.table_name);
             const auto rows = filter_rows(table, stmt.where, storage);
 
+            for (const auto& order_by : stmt.order_by)
+            {
+                validate_select_projection(order_by.expression, table, storage);
+            }
+
+            std::vector<ProjectedSelectRow> projected_rows;
+            projected_rows.reserve(rows.size());
+
             if (stmt.select_all)
             {
                 SelectResult result;
@@ -570,7 +686,21 @@ namespace sql
 
                 for (const auto* row : rows)
                 {
-                    result.rows.push_back(*row);
+                    ProjectedSelectRow projected_row;
+                    projected_row.values = *row;
+                    projected_row.order_values.reserve(stmt.order_by.size());
+                    for (const auto& order_by : stmt.order_by)
+                    {
+                        projected_row.order_values.push_back(evaluate_expression(order_by.expression, table, *row, storage));
+                    }
+                    projected_rows.push_back(std::move(projected_row));
+                }
+
+                apply_select_modifiers(stmt, projected_rows);
+                result.rows.reserve(projected_rows.size());
+                for (auto& projected_row : projected_rows)
+                {
+                    result.rows.push_back(std::move(projected_row.values));
                 }
                 return result;
             }
@@ -586,29 +716,47 @@ namespace sql
 
             if (has_aggregate_projection)
             {
-                Row aggregate_row;
-                aggregate_row.reserve(stmt.projections.size());
+                ProjectedSelectRow aggregate_row;
+                aggregate_row.values.reserve(stmt.projections.size());
                 for (const auto& projection : stmt.projections)
                 {
                     if (!projection || projection->kind != ExpressionKind::FunctionCall || !is_aggregate_function_name(projection->text))
                     {
                         fail("Aggregate queries only support aggregate functions in SELECT projections");
                     }
-                    aggregate_row.push_back(evaluate_aggregate_function(projection, table, rows, storage).text);
+                    aggregate_row.values.push_back(evaluate_aggregate_function(projection, table, rows, storage).text);
                 }
-                result.rows.push_back(std::move(aggregate_row));
+                projected_rows.push_back(std::move(aggregate_row));
+                apply_select_modifiers(stmt, projected_rows);
+                result.rows.reserve(projected_rows.size());
+                for (auto& projected_row : projected_rows)
+                {
+                    result.rows.push_back(std::move(projected_row.values));
+                }
                 return result;
             }
 
             for (const auto* row : rows)
             {
-                Row projected_row;
-                projected_row.reserve(stmt.projections.size());
+                ProjectedSelectRow projected_row;
+                projected_row.values.reserve(stmt.projections.size());
                 for (const auto& projection : stmt.projections)
                 {
-                    projected_row.push_back(evaluate_expression(projection, table, *row, storage).text);
+                    projected_row.values.push_back(evaluate_expression(projection, table, *row, storage).text);
                 }
-                result.rows.push_back(std::move(projected_row));
+                projected_row.order_values.reserve(stmt.order_by.size());
+                for (const auto& order_by : stmt.order_by)
+                {
+                    projected_row.order_values.push_back(evaluate_expression(order_by.expression, table, *row, storage));
+                }
+                projected_rows.push_back(std::move(projected_row));
+            }
+
+            apply_select_modifiers(stmt, projected_rows);
+            result.rows.reserve(projected_rows.size());
+            for (auto& projected_row : projected_rows)
+            {
+                result.rows.push_back(std::move(projected_row.values));
             }
 
             return result;

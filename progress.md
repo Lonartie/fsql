@@ -5,8 +5,7 @@
 - CREATE VIEW / DROP VIEW command
 - SELECT from multiple sources (tables and subqueries)
     - Addressing columns by table name (e.g. table1.column1) to avoid ambiguity
-- JOINs, GROUP BY, HAVING, ORDER BY
-- LIMIT, OFFSET, DISTINCT, UNIQUE
+- JOINs, GROUP BY, HAVING
 - UNION, UNION ALL, INTERSECT, EXCEPT
 - EXISTS, IN, ANY, ALL
 - BETWEEN, LIKE, REGEXP
@@ -28,3 +27,8 @@
 ## In Progress
 
 ## Completed
+- SELECT result shaping for single-table queries:
+  - ORDER BY
+  - LIMIT
+  - OFFSET
+  - DISTINCT / UNIQUE
