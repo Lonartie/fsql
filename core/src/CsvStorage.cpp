@@ -4,6 +4,7 @@
 #include "StringUtils.h"
 
 #include <fstream>
+#include <sstream>
 #include <utility>
 
 namespace sql
@@ -45,6 +46,21 @@ namespace sql
         return root_directory_ / (table_name + ".csv");
     }
 
+    std::filesystem::path CsvStorage::view_path(const std::string& view_name) const
+    {
+        return root_directory_ / (view_name + ".view.sql");
+    }
+
+    bool CsvStorage::has_table(const std::string& table_name) const
+    {
+        return std::filesystem::exists(table_path(table_name));
+    }
+
+    bool CsvStorage::has_view(const std::string& view_name) const
+    {
+        return std::filesystem::exists(view_path(view_name));
+    }
+
     Table CsvStorage::load_table(const std::string& table_name) const
     {
         const auto path = table_path(table_name);
@@ -82,8 +98,33 @@ namespace sql
         return table;
     }
 
+    ViewDefinition CsvStorage::load_view(const std::string& view_name) const
+    {
+        const auto path = view_path(view_name);
+        std::ifstream input(path);
+        if (!input)
+        {
+            fail("View does not exist: " + view_name);
+        }
+
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        const auto query = buffer.str();
+        if (query.empty())
+        {
+            fail("View is empty or invalid: " + view_name);
+        }
+
+        return {view_name, query};
+    }
+
     void CsvStorage::save_table(const Table& table)
     {
+        if (has_view(table.name))
+        {
+            fail("View already exists: " + table.name);
+        }
+
         const auto path = table_path(table.name);
         std::ofstream output(path, std::ios::trunc);
         if (!output)
@@ -115,6 +156,23 @@ namespace sql
         }
     }
 
+    void CsvStorage::save_view(const ViewDefinition& view)
+    {
+        if (has_table(view.name))
+        {
+            fail("Table already exists: " + view.name);
+        }
+
+        const auto path = view_path(view.name);
+        std::ofstream output(path, std::ios::trunc);
+        if (!output)
+        {
+            fail("Unable to write view: " + view.name);
+        }
+
+        output << view.select_statement;
+    }
+
     void CsvStorage::delete_table(const std::string& table_name)
     {
         const auto path = table_path(table_name);
@@ -126,6 +184,20 @@ namespace sql
         if (!std::filesystem::remove(path))
         {
             fail("Unable to delete table: " + table_name);
+        }
+    }
+
+    void CsvStorage::delete_view(const std::string& view_name)
+    {
+        const auto path = view_path(view_name);
+        if (!std::filesystem::exists(path))
+        {
+            fail("View does not exist: " + view_name);
+        }
+
+        if (!std::filesystem::remove(path))
+        {
+            fail("Unable to delete view: " + view_name);
         }
     }
 

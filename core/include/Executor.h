@@ -26,13 +26,13 @@ namespace sql
         void execute(const Statement& statement);
 
     private:
-        /// @brief Executes `CREATE TABLE`.
+        /// @brief Executes `CREATE TABLE` or `CREATE VIEW`.
         void execute_create(const CreateStatement& stmt);
 
-        /// @brief Executes `ALTER TABLE`.
+        /// @brief Executes `ALTER TABLE` or `ALTER VIEW`.
         void execute_alter(const AlterStatement& stmt);
 
-        /// @brief Executes `DROP TABLE`.
+        /// @brief Executes `DROP TABLE` or `DROP VIEW`.
         void execute_drop(const DropStatement& stmt);
 
         /// @brief Executes `DELETE FROM`.

@@ -25,18 +25,41 @@ namespace sql
         /// @return Full CSV file path.
         std::filesystem::path table_path(const std::string& table_name) const override;
 
+        /// @brief Checks whether a CSV-backed table exists.
+        /// @param table_name Logical table name.
+        /// @return `true` when the table exists.
+        bool has_table(const std::string& table_name) const override;
+
+        /// @brief Checks whether a persisted view exists.
+        /// @param view_name Logical view name.
+        /// @return `true` when the view exists.
+        bool has_view(const std::string& view_name) const override;
+
         /// @brief Loads a table from disk.
         /// @param table_name Logical table name.
         /// @return Loaded table.
         Table load_table(const std::string& table_name) const override;
 
+        /// @brief Loads a view definition from disk.
+        /// @param view_name Logical view name.
+        /// @return Loaded view definition.
+        ViewDefinition load_view(const std::string& view_name) const override;
+
         /// @brief Saves a table to disk.
         /// @param table Table to persist.
         void save_table(const Table& table) override;
 
+        /// @brief Saves a view definition to disk.
+        /// @param view View definition to persist.
+        void save_view(const ViewDefinition& view) override;
+
         /// @brief Deletes a table from disk.
         /// @param table_name Logical table name.
         void delete_table(const std::string& table_name) override;
+
+        /// @brief Deletes a view from disk.
+        /// @param view_name Logical view name.
+        void delete_view(const std::string& view_name) override;
 
         /// @brief Resolves a column index by name.
         /// @param table Table containing the column.
@@ -55,6 +78,11 @@ namespace sql
         static std::vector<std::string> parse_csv_line(const std::string& line);
 
     private:
+        /// @brief Resolves the file path for a view definition.
+        /// @param view_name Logical view name.
+        /// @return Full view definition path.
+        std::filesystem::path view_path(const std::string& view_name) const;
+
         /// @brief Root directory containing CSV files.
         std::filesystem::path root_directory_;
     };

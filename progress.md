@@ -1,7 +1,7 @@
 # Features
 
 ## Planned
-- CREATE VIEW / DROP VIEW command
+- Align default value syntax with SQL standard (e.g. DEFAULT 'value' instead of = 'value')
 - JOINs
 - UNION, UNION ALL, INTERSECT, EXCEPT
 - Further NULL semantics alignment beyond the basic literal/predicate support
@@ -16,15 +16,16 @@
     - round, abs, coalesce, nullif, etc.
   - JSON functions:
     - json_array, json_object, json_array_length, json_array_length, json_array_length, json_array_length, etc.
-- Align default value syntax with SQL standard (e.g. DEFAULT 'value' instead of = 'value')
 - More powerful subqueries returning lists of values
   - Additional list-returning predicate forms and broader subquery semantics
 - Overhaul main help page and README
 - Create SYNTAX.md with detailed syntax documentation since this project is not real SQL
 
-## In Progress
-
 ## Completed
+- VIEW commands as readonly virtual tables:
+  - CREATE VIEW
+  - DROP VIEW
+  - ALTER VIEW
 - SELECT result shaping for single-table queries:
   - ORDER BY
   - LIMIT

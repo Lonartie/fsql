@@ -27,6 +27,23 @@ namespace sql
         std::vector<Row> rows;
     };
 
+    /// @brief Represents a stored readonly view definition.
+    struct ViewDefinition
+    {
+        /// @brief Logical view name.
+        std::string name;
+
+        /// @brief Serialized `SELECT` statement backing the view.
+        std::string select_statement;
+    };
+
+    /// @brief Supported schema object kinds.
+    enum class SchemaObjectKind
+    {
+        Table,
+        View
+    };
+
     /// @brief Supported token kinds produced by the tokenizer.
     enum class TokenType
     {
@@ -182,20 +199,29 @@ namespace sql
         ExpressionPtr default_value;
     };
 
-    /// @brief Parsed `CREATE TABLE` statement.
+    /// @brief Parsed `CREATE TABLE` or `CREATE VIEW` statement.
     struct CreateStatement
     {
-        /// @brief Target table name.
+        /// @brief Target schema object kind.
+        SchemaObjectKind object_kind = SchemaObjectKind::Table;
+
+        /// @brief Target table or view name.
         std::string table_name;
 
-        /// @brief Declared columns and attributes.
+        /// @brief Declared columns and attributes for table creation.
         std::vector<ColumnDefinition> columns;
+
+        /// @brief Stored query for view creation.
+        SelectStatementPtr view_query;
     };
 
-    /// @brief Parsed `DROP TABLE` statement.
+    /// @brief Parsed `DROP TABLE` or `DROP VIEW` statement.
     struct DropStatement
     {
-        /// @brief Target table name.
+        /// @brief Target schema object kind.
+        SchemaObjectKind object_kind = SchemaObjectKind::Table;
+
+        /// @brief Target table or view name.
         std::string table_name;
     };
 
@@ -308,13 +334,17 @@ namespace sql
         SetDefault,
         DropDefault,
         SetAutoIncrement,
-        DropAutoIncrement
+        DropAutoIncrement,
+        SetViewQuery
     };
 
-    /// @brief Parsed `ALTER TABLE` statement.
+    /// @brief Parsed `ALTER TABLE` or `ALTER VIEW` statement.
     struct AlterStatement
     {
-        /// @brief Target table name.
+        /// @brief Target schema object kind.
+        SchemaObjectKind object_kind = SchemaObjectKind::Table;
+
+        /// @brief Target table or view name.
         std::string table_name;
 
         /// @brief Requested alter action.
@@ -328,6 +358,9 @@ namespace sql
 
         /// @brief New column name for rename actions.
         std::string new_name;
+
+        /// @brief Replacement query for `ALTER VIEW`.
+        SelectStatementPtr view_query;
     };
 
     /// @brief Represents a parsed SQL statement.

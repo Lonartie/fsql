@@ -103,6 +103,51 @@ TEST_CASE("select supports source subqueries with aliases")
     CHECK(text.find("2 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("select reads rows from created views")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Archive logs', 10, true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 20, false);"));
+    context.executor.execute(sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title, team_id FROM tasks WHERE done = false;"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT title FROM open_tasks ORDER BY title ASC;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Write docs") != std::string::npos);
+    CHECK(text.find("Archive logs") == std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("select supports views built on other views")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id, done);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Archive logs', 10, true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.executor.execute(sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title, team_id FROM tasks WHERE done = false;"));
+    context.executor.execute(sql_test::parse_statement(
+        "CREATE VIEW open_task_lookup AS SELECT open_tasks.title, teams.name FROM open_tasks, teams WHERE open_tasks.team_id = teams.id;"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT * FROM open_task_lookup;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("open_tasks.title") != std::string::npos);
+    CHECK(text.find("teams.name") != std::string::npos);
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("ops") != std::string::npos);
+    CHECK(text.find("Archive logs") == std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
 TEST_CASE("select all returns all columns")
 {
     sql_test::ExecutorContext context;

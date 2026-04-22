@@ -34,6 +34,16 @@ namespace sql
         return std::filesystem::path(table_name + ".csv");
     }
 
+    bool MemoryStorage::has_table(const std::string& table_name) const
+    {
+        return tables_.contains(table_name);
+    }
+
+    bool MemoryStorage::has_view(const std::string& view_name) const
+    {
+        return views_.contains(view_name);
+    }
+
     Table MemoryStorage::load_table(const std::string& table_name) const
     {
         const auto it = tables_.find(table_name);
@@ -45,9 +55,33 @@ namespace sql
         return it->second;
     }
 
+    ViewDefinition MemoryStorage::load_view(const std::string& view_name) const
+    {
+        const auto it = views_.find(view_name);
+        if (it == views_.end())
+        {
+            fail("View does not exist: " + view_name);
+        }
+
+        return it->second;
+    }
+
     void MemoryStorage::save_table(const Table& table)
     {
+        if (has_view(table.name))
+        {
+            fail("View already exists: " + table.name);
+        }
         tables_[table.name] = table;
+    }
+
+    void MemoryStorage::save_view(const ViewDefinition& view)
+    {
+        if (has_table(view.name))
+        {
+            fail("Table already exists: " + view.name);
+        }
+        views_[view.name] = view;
     }
 
     void MemoryStorage::delete_table(const std::string& table_name)
@@ -55,6 +89,14 @@ namespace sql
         if (tables_.erase(table_name) == 0)
         {
             fail("Table does not exist: " + table_name);
+        }
+    }
+
+    void MemoryStorage::delete_view(const std::string& view_name)
+    {
+        if (views_.erase(view_name) == 0)
+        {
+            fail("View does not exist: " + view_name);
         }
     }
 

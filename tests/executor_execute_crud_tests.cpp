@@ -70,6 +70,17 @@ TEST_CASE("rejects duplicate table creation")
     CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, done);")), std::runtime_error);
 }
 
+TEST_CASE("rejects name collisions between tables and views")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title);"));
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("CREATE VIEW tasks AS SELECT title FROM tasks;")), std::runtime_error);
+
+    context.executor.execute(sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title FROM tasks;"));
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("CREATE TABLE open_tasks (title);")), std::runtime_error);
+}
+
 TEST_CASE("rejects unknown columns")
 {
     sql_test::ExecutorContext context;
@@ -145,6 +156,48 @@ TEST_CASE("rejects operations on missing tables")
     CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("UPDATE missing SET value = 1;")), std::runtime_error);
 }
 
+TEST_CASE("alter view replaces stored definition")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Archive logs', true);"));
+    context.executor.execute(sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title FROM tasks WHERE done = false;"));
+    context.executor.execute(sql_test::parse_statement("ALTER VIEW open_tasks AS SELECT title FROM tasks WHERE done = true;"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT title FROM open_tasks;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Archive logs") != std::string::npos);
+    CHECK(text.find("Patch release") == std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("rejects write operations and mismatched drop commands against views")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, done);"));
+    context.executor.execute(sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title FROM tasks WHERE done = false;"));
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("INSERT INTO open_tasks VALUES ('Patch release');")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("UPDATE open_tasks SET title = 'Done';")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("DELETE FROM open_tasks;")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("ALTER TABLE open_tasks ADD COLUMN team;")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("DROP TABLE open_tasks;")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("DROP VIEW tasks;")), std::runtime_error);
+}
+
+TEST_CASE("rejects cyclic view definitions and rolls them back")
+{
+    sql_test::ExecutorContext context;
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("CREATE VIEW loop_view AS SELECT * FROM loop_view;")), std::runtime_error);
+    CHECK_FALSE(context.storage->has_view("loop_view"));
+}
+
 TEST_CASE("rejects dropping missing table")
 {
     sql_test::ExecutorContext context;
@@ -210,6 +263,31 @@ TEST_CASE("drops csv-backed table files")
     REQUIRE(std::filesystem::exists(csv_path));
     executor.execute(sql_test::parse_statement("DROP TABLE todos;"));
     CHECK_FALSE(std::filesystem::exists(csv_path));
+}
+
+TEST_CASE("persists and drops csv-backed views")
+{
+    const sql_test::TempDirectoryGuard temp_dir("sql_doctest_view");
+    const auto view_path = temp_dir.path / "open_tasks.view.sql";
+
+    auto storage = std::make_shared<sql::CsvStorage>(temp_dir.path);
+    std::ostringstream output;
+    sql::Executor executor(storage, output);
+
+    executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, done);"));
+    executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', false);"));
+    executor.execute(sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title FROM tasks WHERE done = false;"));
+    REQUIRE(std::filesystem::exists(view_path));
+
+    auto reloaded_storage = std::make_shared<sql::CsvStorage>(temp_dir.path);
+    std::ostringstream reloaded_output;
+    sql::Executor reloaded_executor(reloaded_storage, reloaded_output);
+
+    reloaded_executor.execute(sql_test::parse_statement("SELECT title FROM open_tasks;"));
+    CHECK(reloaded_output.str().find("Patch release") != std::string::npos);
+
+    reloaded_executor.execute(sql_test::parse_statement("DROP VIEW open_tasks;"));
+    CHECK_FALSE(std::filesystem::exists(view_path));
 }
 
 TEST_SUITE_END();

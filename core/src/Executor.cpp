@@ -376,6 +376,82 @@ namespace sql
 
         SelectResult run_select_statement(const SelectStatement& stmt, const IStorage& storage);
 
+        thread_local std::vector<std::string> active_view_stack;
+
+        bool has_active_view(const std::string& view_name)
+        {
+            return std::any_of(active_view_stack.begin(), active_view_stack.end(), [&](const auto& active_name)
+            {
+                return iequals(active_name, view_name);
+            });
+        }
+
+        std::string describe_view_cycle(const std::string& view_name)
+        {
+            std::ostringstream stream;
+            for (std::size_t i = 0; i < active_view_stack.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    stream << " -> ";
+                }
+                stream << active_view_stack[i];
+            }
+            if (!active_view_stack.empty())
+            {
+                stream << " -> ";
+            }
+            stream << view_name;
+            return stream.str();
+        }
+
+        class ActiveViewGuard
+        {
+        public:
+            explicit ActiveViewGuard(std::string view_name) : view_name_(std::move(view_name))
+            {
+                if (has_active_view(view_name_))
+                {
+                    fail("Cyclic view reference detected: " + describe_view_cycle(view_name_));
+                }
+                active_view_stack.push_back(view_name_);
+            }
+
+            ~ActiveViewGuard()
+            {
+                if (!active_view_stack.empty())
+                {
+                    active_view_stack.pop_back();
+                }
+            }
+
+        private:
+            std::string view_name_;
+        };
+
+        SelectStatement parse_view_statement(const ViewDefinition& view)
+        {
+            Tokenizer tokenizer(view.select_statement);
+            Parser parser(tokenizer.tokenize());
+            const auto statement = parser.parse_statement();
+            if (statement.kind != Statement::Kind::Select)
+            {
+                fail("View definition must contain a SELECT statement: " + view.name);
+            }
+            return statement.select;
+        }
+
+        SelectResult run_view_statement(const std::string& view_name, const IStorage& storage)
+        {
+            ActiveViewGuard guard(view_name);
+            return run_select_statement(parse_view_statement(storage.load_view(view_name)), storage);
+        }
+
+        void validate_view_definition(const std::string& view_name, const IStorage& storage)
+        {
+            static_cast<void>(run_view_statement(view_name, storage));
+        }
+
         std::string serialize_select_source(const SelectSource& source)
         {
             std::ostringstream stream;
@@ -1007,8 +1083,23 @@ namespace sql
             MaterializedSelectSource materialized;
             if (source.kind == SelectSource::Kind::Table)
             {
-                const Table table = storage.load_table(source.name);
+                const bool has_table = storage.has_table(source.name);
+                const bool has_view = storage.has_view(source.name);
+                if (has_table && has_view)
+                {
+                    fail("Name collision between table and view: " + source.name);
+                }
+
                 materialized.source_name = source.alias.value_or(source.name);
+                if (has_view)
+                {
+                    const auto result = run_view_statement(source.name, storage);
+                    materialized.column_names = result.column_names;
+                    materialized.rows = result.rows;
+                    return materialized;
+                }
+
+                const Table table = storage.load_table(source.name);
                 materialized.column_names.reserve(table.columns.size());
                 for (const auto& column : table.columns)
                 {
@@ -1867,6 +1958,54 @@ namespace sql
 
     void Executor::execute_alter(const AlterStatement& stmt)
     {
+        const bool has_table = storage_->has_table(stmt.table_name);
+        const bool has_view = storage_->has_view(stmt.table_name);
+        if (has_table && has_view)
+        {
+            fail("Name collision between table and view: " + stmt.table_name);
+        }
+
+        if (stmt.object_kind == SchemaObjectKind::View)
+        {
+            if (stmt.action != AlterAction::SetViewQuery)
+            {
+                fail("Unsupported ALTER VIEW action");
+            }
+            if (!stmt.view_query)
+            {
+                fail("ALTER VIEW requires a SELECT statement");
+            }
+            if (has_table)
+            {
+                fail("Cannot ALTER VIEW because '" + stmt.table_name + "' is a table");
+            }
+
+            const auto previous_view = storage_->load_view(stmt.table_name);
+
+            ViewDefinition view;
+            view.name = stmt.table_name;
+            view.select_statement = serialize_select_statement(*stmt.view_query);
+            storage_->save_view(view);
+
+            try
+            {
+                validate_view_definition(stmt.table_name, *storage_);
+            }
+            catch (...)
+            {
+                storage_->save_view(previous_view);
+                throw;
+            }
+
+            output_ << "Altered view '" << stmt.table_name << "'\n";
+            return;
+        }
+
+        if (has_view)
+        {
+            fail("Cannot ALTER TABLE on view: " + stmt.table_name);
+        }
+
         Table table = storage_->load_table(stmt.table_name);
 
         auto find_column_index = [&]() -> std::size_t
@@ -2006,65 +2145,117 @@ namespace sql
             output_ << "Altered table '" << stmt.table_name << "'\n";
             return;
         }
+        case AlterAction::SetViewQuery:
+            fail("ALTER VIEW action reached ALTER TABLE handler");
         }
     }
 
     void Executor::execute_create(const CreateStatement& stmt)
     {
+        if (stmt.object_kind == SchemaObjectKind::View)
+        {
+            if (!stmt.view_query)
+            {
+                fail("CREATE VIEW requires a SELECT statement");
+            }
+            if (storage_->has_table(stmt.table_name))
+            {
+                fail("Table already exists: " + stmt.table_name);
+            }
+            if (storage_->has_view(stmt.table_name))
+            {
+                fail("View already exists: " + stmt.table_name);
+            }
+
+            ViewDefinition view;
+            view.name = stmt.table_name;
+            view.select_statement = serialize_select_statement(*stmt.view_query);
+            storage_->save_view(view);
+
+            try
+            {
+                validate_view_definition(stmt.table_name, *storage_);
+            }
+            catch (...)
+            {
+                storage_->delete_view(stmt.table_name);
+                throw;
+            }
+
+            output_ << "Created view '" << stmt.table_name << "'\n";
+            return;
+        }
+
         if (stmt.columns.empty())
         {
             fail("CREATE TABLE requires at least one column");
         }
 
-        const auto path = storage_->table_path(stmt.table_name);
-        if (std::filesystem::exists(path))
+        if (storage_->has_table(stmt.table_name))
         {
             fail("Table already exists: " + stmt.table_name);
         }
-
-        try
+        if (storage_->has_view(stmt.table_name))
         {
-            static_cast<void>(storage_->load_table(stmt.table_name));
-        }
-        catch (const std::runtime_error& error)
-        {
-            if (error.what() != std::string("Table does not exist: ") + stmt.table_name)
-            {
-                throw;
-            }
-
-            Table table;
-            table.name = stmt.table_name;
-            table.columns.reserve(stmt.columns.size());
-            for (const auto& column : stmt.columns)
-            {
-                std::string stored_name = column.name;
-                if (column.auto_increment)
-                {
-                    stored_name += " AUTO_INCREMENT";
-                }
-                if (column.default_value)
-                {
-                    stored_name += " DEFAULT(" + serialize_expression(column.default_value) + ")";
-                }
-                table.columns.push_back(std::move(stored_name));
-            }
-            storage_->save_table(table);
-            output_ << "Created table '" << stmt.table_name << "'\n";
-            return;
+            fail("View already exists: " + stmt.table_name);
         }
 
-        fail("Table already exists: " + stmt.table_name);
+        Table table;
+        table.name = stmt.table_name;
+        table.columns.reserve(stmt.columns.size());
+        for (const auto& column : stmt.columns)
+        {
+            std::string stored_name = column.name;
+            if (column.auto_increment)
+            {
+                stored_name += " AUTO_INCREMENT";
+            }
+            if (column.default_value)
+            {
+                stored_name += " DEFAULT(" + serialize_expression(column.default_value) + ")";
+            }
+            table.columns.push_back(std::move(stored_name));
+        }
+        storage_->save_table(table);
+        output_ << "Created table '" << stmt.table_name << "'\n";
     }
 
     void Executor::execute_drop(const DropStatement& stmt)
     {
+        const bool has_table = storage_->has_table(stmt.table_name);
+        const bool has_view = storage_->has_view(stmt.table_name);
+        if (has_table && has_view)
+        {
+            fail("Name collision between table and view: " + stmt.table_name);
+        }
+
+        if (stmt.object_kind == SchemaObjectKind::View)
+        {
+            if (has_table)
+            {
+                fail("Cannot DROP VIEW because '" + stmt.table_name + "' is a table");
+            }
+            storage_->delete_view(stmt.table_name);
+            output_ << "Dropped view '" << stmt.table_name << "'\n";
+            return;
+        }
+
+        if (has_view)
+        {
+            fail("Cannot DROP TABLE on view: " + stmt.table_name);
+        }
+
         storage_->delete_table(stmt.table_name);
         output_ << "Dropped table '" << stmt.table_name << "'\n";
     }
 
     void Executor::execute_delete(const DeleteStatement& stmt)
     {
+        if (storage_->has_view(stmt.table_name))
+        {
+            fail("Cannot DELETE FROM view: " + stmt.table_name);
+        }
+
         Table table = storage_->load_table(stmt.table_name);
         const auto original_size = table.rows.size();
 
@@ -2089,6 +2280,11 @@ namespace sql
 
     void Executor::execute_insert(const InsertStatement& stmt)
     {
+        if (storage_->has_view(stmt.table_name))
+        {
+            fail("Cannot INSERT INTO view: " + stmt.table_name);
+        }
+
         Table table = storage_->load_table(stmt.table_name);
         Row row(table.columns.size());
         std::vector<bool> assigned(table.columns.size(), false);
@@ -2189,6 +2385,11 @@ namespace sql
 
     void Executor::execute_update(const UpdateStatement& stmt)
     {
+        if (storage_->has_view(stmt.table_name))
+        {
+            fail("Cannot UPDATE view: " + stmt.table_name);
+        }
+
         Table table = storage_->load_table(stmt.table_name);
         std::vector<std::pair<std::size_t, ExpressionPtr>> assignments;
         assignments.reserve(stmt.assignments.size());

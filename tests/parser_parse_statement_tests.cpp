@@ -16,6 +16,34 @@ TEST_CASE("parses create statement")
     CHECK_EQ(statement.create.columns[3].name, "done");
 }
 
+TEST_CASE("parses view statements")
+{
+    const auto create_statement = sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title, team_id FROM tasks WHERE done = false;");
+
+    CHECK_EQ(static_cast<int>(create_statement.kind), static_cast<int>(sql::Statement::Kind::Create));
+    CHECK_EQ(static_cast<int>(create_statement.create.object_kind), static_cast<int>(sql::SchemaObjectKind::View));
+    CHECK_EQ(create_statement.create.table_name, "open_tasks");
+    REQUIRE(create_statement.create.view_query != nullptr);
+    REQUIRE_EQ(create_statement.create.view_query->sources.size(), 1U);
+    CHECK_EQ(create_statement.create.view_query->sources[0].name, "tasks");
+    REQUIRE(create_statement.create.view_query->where != nullptr);
+    CHECK_EQ(static_cast<int>(create_statement.create.view_query->where->kind), static_cast<int>(sql::ExpressionKind::Binary));
+
+    const auto drop_statement = sql_test::parse_statement("DROP VIEW open_tasks;");
+    CHECK_EQ(static_cast<int>(drop_statement.kind), static_cast<int>(sql::Statement::Kind::Drop));
+    CHECK_EQ(static_cast<int>(drop_statement.drop.object_kind), static_cast<int>(sql::SchemaObjectKind::View));
+    CHECK_EQ(drop_statement.drop.table_name, "open_tasks");
+
+    const auto alter_statement = sql_test::parse_statement("ALTER VIEW open_tasks AS SELECT title FROM tasks WHERE done = true;");
+    CHECK_EQ(static_cast<int>(alter_statement.kind), static_cast<int>(sql::Statement::Kind::Alter));
+    CHECK_EQ(static_cast<int>(alter_statement.alter.object_kind), static_cast<int>(sql::SchemaObjectKind::View));
+    CHECK_EQ(static_cast<int>(alter_statement.alter.action), static_cast<int>(sql::AlterAction::SetViewQuery));
+    CHECK_EQ(alter_statement.alter.table_name, "open_tasks");
+    REQUIRE(alter_statement.alter.view_query != nullptr);
+    REQUIRE_EQ(alter_statement.alter.view_query->sources.size(), 1U);
+    CHECK_EQ(alter_statement.alter.view_query->sources[0].name, "tasks");
+}
+
 TEST_CASE("parses insert with explicit columns")
 {
     const auto statement = sql_test::parse_statement("INSERT INTO todos (title, done) VALUES ('Buy milk', true);");

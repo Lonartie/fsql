@@ -15,18 +15,41 @@ namespace sql
         /// @return Synthetic path ending in `.csv`.
         std::filesystem::path table_path(const std::string& table_name) const override;
 
+        /// @brief Checks whether a table exists in memory.
+        /// @param table_name Logical table name.
+        /// @return `true` when the table exists.
+        bool has_table(const std::string& table_name) const override;
+
+        /// @brief Checks whether a view exists in memory.
+        /// @param view_name Logical view name.
+        /// @return `true` when the view exists.
+        bool has_view(const std::string& view_name) const override;
+
         /// @brief Loads a table from memory.
         /// @param table_name Logical table name.
         /// @return Loaded table.
         Table load_table(const std::string& table_name) const override;
 
+        /// @brief Loads a view definition from memory.
+        /// @param view_name Logical view name.
+        /// @return Loaded view definition.
+        ViewDefinition load_view(const std::string& view_name) const override;
+
         /// @brief Saves a table into memory.
         /// @param table Table to persist.
         void save_table(const Table& table) override;
 
+        /// @brief Saves a view definition into memory.
+        /// @param view View definition to persist.
+        void save_view(const ViewDefinition& view) override;
+
         /// @brief Deletes a table from memory.
         /// @param table_name Logical table name.
         void delete_table(const std::string& table_name) override;
+
+        /// @brief Deletes a view from memory.
+        /// @param view_name Logical view name.
+        void delete_view(const std::string& view_name) override;
 
         /// @brief Resolves a column index by name.
         /// @param table Table containing the column.
@@ -37,5 +60,8 @@ namespace sql
     private:
         /// @brief In-memory table store keyed by logical table name.
         std::unordered_map<std::string, Table> tables_;
+
+        /// @brief In-memory view store keyed by logical view name.
+        std::unordered_map<std::string, ViewDefinition> views_;
     };
 }

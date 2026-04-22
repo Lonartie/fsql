@@ -25,13 +25,13 @@ namespace sql
         ExpressionPtr parse_expression();
 
     private:
-        /// @brief Parses a `CREATE TABLE` statement.
+        /// @brief Parses a `CREATE TABLE` or `CREATE VIEW` statement.
         Statement parse_create();
 
-        /// @brief Parses an `ALTER TABLE` statement.
+        /// @brief Parses an `ALTER TABLE` or `ALTER VIEW` statement.
         Statement parse_alter();
 
-        /// @brief Parses a `DROP TABLE` statement.
+        /// @brief Parses a `DROP TABLE` or `DROP VIEW` statement.
         Statement parse_drop();
 
         /// @brief Parses a `DELETE FROM` statement.
