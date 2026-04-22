@@ -124,6 +124,17 @@ namespace sql
 
     Statement Parser::parse_select()
     {
+        Statement statement;
+        statement.kind = Statement::Kind::Select;
+        statement.select = parse_select_statement();
+
+        consume_optional(TokenType::Semicolon);
+        expect(TokenType::End, "Unexpected tokens after SELECT");
+        return statement;
+    }
+
+    SelectStatement Parser::parse_select_statement()
+    {
         SelectStatement stmt;
         if (check(TokenType::Star))
         {
@@ -142,13 +153,7 @@ namespace sql
             stmt.where = parse_expression();
         }
 
-        consume_optional(TokenType::Semicolon);
-        expect(TokenType::End, "Unexpected tokens after SELECT");
-
-        Statement statement;
-        statement.kind = Statement::Kind::Select;
-        statement.select = std::move(stmt);
-        return statement;
+        return stmt;
     }
 
     Statement Parser::parse_update()
@@ -405,6 +410,13 @@ namespace sql
     {
         if (consume_optional(TokenType::LParen))
         {
+            if (match_keyword("SELECT"))
+            {
+                auto statement = parse_select_statement();
+                expect(TokenType::RParen, "Expected ')' after SELECT expression");
+                return make_select(std::move(statement));
+            }
+
             auto expression = parse_expression();
             expect(TokenType::RParen, "Expected ')' after expression");
             return expression;
@@ -450,6 +462,14 @@ namespace sql
         auto expression = std::make_shared<Expression>();
         expression->kind = ExpressionKind::FunctionCall;
         expression->text = std::move(text);
+        return expression;
+    }
+
+    ExpressionPtr Parser::make_select(SelectStatement statement) const
+    {
+        auto expression = std::make_shared<Expression>();
+        expression->kind = ExpressionKind::Select;
+        expression->select = std::make_shared<SelectStatement>(std::move(statement));
         return expression;
     }
 

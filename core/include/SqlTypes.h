@@ -74,6 +74,7 @@ namespace sql
     {
         Literal,
         Identifier,
+        Select,
         FunctionCall,
         Unary,
         Binary
@@ -110,9 +111,13 @@ namespace sql
     };
 
     struct Expression;
+    struct SelectStatement;
 
     /// @brief Shared pointer type for expression nodes.
     using ExpressionPtr = std::shared_ptr<Expression>;
+
+    /// @brief Shared pointer type for select statement nodes embedded in expressions.
+    using SelectStatementPtr = std::shared_ptr<SelectStatement>;
 
     /// @brief Represents an expression tree node.
     struct Expression
@@ -122,6 +127,9 @@ namespace sql
 
         /// @brief Literal text, identifier name, or function name.
         std::string text;
+
+        /// @brief Nested select statement when @ref kind is `Select`.
+        SelectStatementPtr select;
 
         /// @brief Unary operator when @ref kind is `Unary`.
         UnaryOperator unary_operator = UnaryOperator::Plus;

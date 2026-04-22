@@ -40,6 +40,10 @@ namespace sql
         /// @brief Parses a `SELECT` statement.
         Statement parse_select();
 
+        /// @brief Parses the body of a `SELECT` statement after the `SELECT` keyword.
+        /// @return Parsed select payload.
+        SelectStatement parse_select_statement();
+
         /// @brief Parses an `UPDATE` statement.
         Statement parse_update();
 
@@ -117,6 +121,11 @@ namespace sql
         /// @param text Function name.
         /// @return Expression node.
         ExpressionPtr make_function(std::string text) const;
+
+        /// @brief Creates a select expression node.
+        /// @param statement Nested select statement.
+        /// @return Expression node.
+        ExpressionPtr make_select(SelectStatement statement) const;
 
         /// @brief Creates a unary expression node.
         /// @param op Unary operator.

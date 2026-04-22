@@ -26,6 +26,13 @@ namespace
         sql::Parser parser(tokenizer.tokenize());
         return parser.parse_statement();
     }
+
+    sql::ExpressionPtr parse_expression(const std::string& query)
+    {
+        sql::Tokenizer tokenizer(query);
+        sql::Parser parser(tokenizer.tokenize());
+        return parser.parse_expression();
+    }
 }
 
 TEST_CASE("Tokenizer parses identifiers strings and punctuation")
@@ -549,11 +556,146 @@ TEST_CASE("Executor supports bitwise expressions in WHERE")
     CHECK(text.find("no-bit-2") == std::string::npos);
 }
 
+TEST_CASE("Executor supports SELECT subqueries in WHERE expressions")
+{
+    auto storage = std::make_shared<sql::MemoryStorage>();
+    std::ostringstream output;
+    sql::Executor executor(storage, output);
+
+    executor.execute(parse_statement("CREATE TABLE todos (title, category);"));
+    executor.execute(parse_statement("CREATE TABLE defaults (value);"));
+    executor.execute(parse_statement("INSERT INTO todos VALUES ('Buy milk', 'home');"));
+    executor.execute(parse_statement("INSERT INTO todos VALUES ('Write docs', 'work');"));
+    executor.execute(parse_statement("INSERT INTO defaults VALUES ('work');"));
+    output.str("");
+    output.clear();
+
+    executor.execute(parse_statement("SELECT title FROM todos WHERE category = (SELECT value FROM defaults);"));
+
+    const auto text = output.str();
+    CHECK(text.find("Write docs") != std::string::npos);
+    CHECK(text.find("Buy milk") == std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("Executor supports SELECT subqueries in INSERT values")
+{
+    auto storage = std::make_shared<sql::MemoryStorage>();
+    std::ostringstream output;
+    sql::Executor executor(storage, output);
+
+    executor.execute(parse_statement("CREATE TABLE source (value);"));
+    executor.execute(parse_statement("CREATE TABLE dest (value);"));
+    executor.execute(parse_statement("INSERT INTO source VALUES ('copied');"));
+    executor.execute(parse_statement("INSERT INTO dest VALUES ((SELECT value FROM source));"));
+
+    const auto table = storage->load_table("dest");
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "copied");
+}
+
+TEST_CASE("Executor supports SELECT subqueries in UPDATE assignments")
+{
+    auto storage = std::make_shared<sql::MemoryStorage>();
+    std::ostringstream output;
+    sql::Executor executor(storage, output);
+
+    executor.execute(parse_statement("CREATE TABLE todos (title, category);"));
+    executor.execute(parse_statement("CREATE TABLE defaults (value);"));
+    executor.execute(parse_statement("INSERT INTO todos VALUES ('Buy milk', 'home');"));
+    executor.execute(parse_statement("INSERT INTO defaults VALUES ('done');"));
+    executor.execute(parse_statement("UPDATE todos SET category = (SELECT value FROM defaults) WHERE title = 'Buy milk';"));
+
+    const auto table = storage->load_table("todos");
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][1], "done");
+}
+
+TEST_CASE("Executor supports SELECT subqueries in default expressions")
+{
+    auto storage = std::make_shared<sql::MemoryStorage>();
+    std::ostringstream output;
+    sql::Executor executor(storage, output);
+
+    executor.execute(parse_statement("CREATE TABLE defaults (value);"));
+    executor.execute(parse_statement("INSERT INTO defaults VALUES ('fallback');"));
+    executor.execute(parse_statement("CREATE TABLE dest (value = (SELECT value FROM defaults));"));
+    executor.execute(parse_statement("INSERT INTO dest VALUES ();"));
+
+    const auto table = storage->load_table("dest");
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "fallback");
+}
+
+TEST_CASE("Executor rejects SELECT subqueries returning no rows")
+{
+    auto storage = std::make_shared<sql::MemoryStorage>();
+    std::ostringstream output;
+    sql::Executor executor(storage, output);
+
+    executor.execute(parse_statement("CREATE TABLE source (value);"));
+    executor.execute(parse_statement("CREATE TABLE dest (value);"));
+
+    CHECK_THROWS_AS(executor.execute(parse_statement("INSERT INTO dest VALUES ((SELECT value FROM source));")), std::runtime_error);
+}
+
+TEST_CASE("Executor rejects SELECT subqueries returning multiple rows")
+{
+    auto storage = std::make_shared<sql::MemoryStorage>();
+    std::ostringstream output;
+    sql::Executor executor(storage, output);
+
+    executor.execute(parse_statement("CREATE TABLE source (value);"));
+    executor.execute(parse_statement("CREATE TABLE dest (value);"));
+    executor.execute(parse_statement("INSERT INTO source VALUES ('a');"));
+    executor.execute(parse_statement("INSERT INTO source VALUES ('b');"));
+
+    CHECK_THROWS_AS(executor.execute(parse_statement("INSERT INTO dest VALUES ((SELECT value FROM source));")), std::runtime_error);
+}
+
+TEST_CASE("Executor rejects SELECT subqueries returning multiple columns")
+{
+    auto storage = std::make_shared<sql::MemoryStorage>();
+    std::ostringstream output;
+    sql::Executor executor(storage, output);
+
+    executor.execute(parse_statement("CREATE TABLE source (value, label);"));
+    executor.execute(parse_statement("CREATE TABLE dest (value);"));
+    executor.execute(parse_statement("INSERT INTO source VALUES ('a', 'b');"));
+
+    CHECK_THROWS_AS(executor.execute(parse_statement("INSERT INTO dest VALUES ((SELECT value, label FROM source));")), std::runtime_error);
+}
+
 TEST_CASE("Parser parses complex WHERE expressions")
 {
     const auto statement = parse_statement("SELECT * FROM nums WHERE !(a + 1 < b) && ((a ^ b) > 0 || ~a < 0);");
     CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
     CHECK(statement.select.where != nullptr);
+}
+
+TEST_CASE("Parser parses SELECT subquery as expression")
+{
+    const auto expression = parse_expression("(SELECT category FROM defaults WHERE id = 1)");
+
+    REQUIRE(expression != nullptr);
+    CHECK_EQ(static_cast<int>(expression->kind), static_cast<int>(sql::ExpressionKind::Select));
+    REQUIRE(expression->select != nullptr);
+    CHECK_EQ(expression->select->table_name, "defaults");
+    REQUIRE_EQ(expression->select->columns.size(), 1U);
+    CHECK_EQ(expression->select->columns[0], "category");
+    CHECK(expression->select->where != nullptr);
+}
+
+TEST_CASE("Parser parses WHERE clause containing SELECT subquery")
+{
+    const auto statement = parse_statement("SELECT title FROM todos WHERE category = (SELECT value FROM defaults);");
+
+    REQUIRE(statement.select.where != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.where->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    REQUIRE(statement.select.where->right != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.where->right->kind), static_cast<int>(sql::ExpressionKind::Select));
+    REQUIRE(statement.select.where->right->select != nullptr);
+    CHECK_EQ(statement.select.where->right->select->table_name, "defaults");
 }
 
 TEST_CASE("Parser parses column default expressions")

@@ -27,6 +27,12 @@ namespace sql
             double number = 0.0;
         };
 
+        struct SelectResult
+        {
+            std::vector<std::string> column_names;
+            std::vector<Row> rows;
+        };
+
         struct ParsedColumnMetadata
         {
             std::string visible_name;
@@ -118,6 +124,38 @@ namespace sql
             return quoted;
         }
 
+        std::string serialize_expression(const ExpressionPtr& expression);
+
+        EvaluatedValue evaluate_expression(const ExpressionPtr& expression, const Table& table, const Row& row, const IStorage& storage);
+
+        std::string serialize_select_statement(const SelectStatement& statement)
+        {
+            std::ostringstream stream;
+            stream << "SELECT ";
+            if (statement.select_all)
+            {
+                stream << '*';
+            }
+            else
+            {
+                for (std::size_t i = 0; i < statement.columns.size(); ++i)
+                {
+                    if (i > 0)
+                    {
+                        stream << ", ";
+                    }
+                    stream << statement.columns[i];
+                }
+            }
+
+            stream << " FROM " << statement.table_name;
+            if (statement.where)
+            {
+                stream << " WHERE " << serialize_expression(statement.where);
+            }
+            return stream.str();
+        }
+
         std::string serialize_expression(const ExpressionPtr& expression)
         {
             if (!expression)
@@ -138,6 +176,12 @@ namespace sql
             }
             case ExpressionKind::Identifier:
                 return expression->text;
+            case ExpressionKind::Select:
+                if (!expression->select)
+                {
+                    fail("Missing SELECT expression payload");
+                }
+                return "(" + serialize_select_statement(*expression->select) + ")";
             case ExpressionKind::FunctionCall:
                 return expression->text + "()";
             case ExpressionKind::Unary:
@@ -284,6 +328,69 @@ namespace sql
             output << '\n';
         }
 
+        SelectResult run_select_statement(const SelectStatement& stmt, const IStorage& storage)
+        {
+            const Table table = storage.load_table(stmt.table_name);
+            std::vector<std::size_t> selected_indexes;
+            std::vector<std::string> selected_names;
+
+            if (stmt.select_all)
+            {
+                for (std::size_t i = 0; i < table.columns.size(); ++i)
+                {
+                    selected_indexes.push_back(i);
+                    selected_names.push_back(visible_column_name(table.columns[i]));
+                }
+            }
+            else
+            {
+                for (const auto& column : stmt.columns)
+                {
+                    const auto index = storage.column_index(table, column);
+                    selected_indexes.push_back(index);
+                    selected_names.push_back(visible_column_name(table.columns[index]));
+                }
+            }
+
+            SelectResult result;
+            result.column_names = std::move(selected_names);
+            for (const auto& row : table.rows)
+            {
+                if (stmt.where && !to_bool(evaluate_expression(stmt.where, table, row, storage)))
+                {
+                    continue;
+                }
+
+                Row projected_row;
+                projected_row.reserve(selected_indexes.size());
+                for (const auto index : selected_indexes)
+                {
+                    projected_row.push_back(row[index]);
+                }
+                result.rows.push_back(std::move(projected_row));
+            }
+
+            return result;
+        }
+
+        EvaluatedValue evaluate_select_expression(const SelectStatement& stmt, const IStorage& storage)
+        {
+            const auto result = run_select_statement(stmt, storage);
+            if (result.column_names.size() != 1)
+            {
+                fail("SELECT expression must return exactly one column");
+            }
+            if (result.rows.empty())
+            {
+                fail("SELECT expression returned no rows");
+            }
+            if (result.rows.size() != 1)
+            {
+                fail("SELECT expression returned more than one row");
+            }
+            return make_text(result.rows[0][0]);
+        }
+
         EvaluatedValue evaluate_expression(const ExpressionPtr& expression, const Table& table, const Row& row, const IStorage& storage)
         {
             if (!expression)
@@ -307,6 +414,12 @@ namespace sql
                     return make_text(expression->text);
                 }
             }
+            case ExpressionKind::Select:
+                if (!expression->select)
+                {
+                    fail("Missing SELECT expression payload");
+                }
+                return evaluate_select_expression(*expression->select, storage);
             case ExpressionKind::FunctionCall:
                 return evaluate_function(expression->text);
             case ExpressionKind::Unary:
@@ -371,18 +484,10 @@ namespace sql
             return evaluate_expression(expression, table, row, storage).text;
         }
 
-        std::string evaluate_value(const ExpressionPtr& expression)
+        std::string evaluate_value(const ExpressionPtr& expression, const IStorage& storage)
         {
             const Table empty_table{};
             const Row empty_row{};
-            struct DummyStorage final : IStorage
-            {
-                std::filesystem::path table_path(const std::string&) const override { return {}; }
-                Table load_table(const std::string&) const override { fail("No table context available"); }
-                void save_table(const Table&) override { fail("No table context available"); }
-                void delete_table(const std::string&) override { fail("No table context available"); }
-                std::size_t column_index(const Table&, const std::string&) const override { fail("No table context available"); }
-            } storage;
             return evaluate_expression(expression, empty_table, empty_row, storage).text;
         }
     }
@@ -515,7 +620,7 @@ namespace sql
             for (std::size_t i = 0; i < stmt.columns->size(); ++i)
             {
                 const auto index = storage_->column_index(table, (*stmt.columns)[i]);
-                row[index] = evaluate_value(stmt.values[i]);
+                row[index] = evaluate_value(stmt.values[i], *storage_);
                 assigned[index] = true;
             }
         }
@@ -528,7 +633,7 @@ namespace sql
 
             for (std::size_t i = 0; i < stmt.values.size(); ++i)
             {
-                row[i] = evaluate_value(stmt.values[i]);
+                row[i] = evaluate_value(stmt.values[i], *storage_);
                 assigned[i] = true;
             }
         }
@@ -546,7 +651,7 @@ namespace sql
             {
                 Tokenizer tokenizer(metadata.default_expression);
                 Parser parser(tokenizer.tokenize());
-                row[i] = evaluate_value(parser.parse_expression());
+                row[i] = evaluate_value(parser.parse_expression(), *storage_);
             }
             else
             {
@@ -572,51 +677,14 @@ namespace sql
 
     void Executor::execute_select(const SelectStatement& stmt)
     {
-        const Table table = storage_->load_table(stmt.table_name);
-        std::vector<std::size_t> selected_indexes;
-        std::vector<std::string> selected_names;
+        const auto result = run_select_statement(stmt, *storage_);
 
-        if (stmt.select_all)
+        std::vector<std::size_t> widths(result.column_names.size(), 0);
+        for (std::size_t i = 0; i < result.column_names.size(); ++i)
         {
-            for (std::size_t i = 0; i < table.columns.size(); ++i)
-            {
-                selected_indexes.push_back(i);
-                selected_names.push_back(visible_column_name(table.columns[i]));
-            }
+            widths[i] = result.column_names[i].size();
         }
-        else
-        {
-            for (const auto& column : stmt.columns)
-            {
-                const auto index = storage_->column_index(table, column);
-                selected_indexes.push_back(index);
-                selected_names.push_back(visible_column_name(table.columns[index]));
-            }
-        }
-
-        std::vector<Row> result_rows;
-        for (const auto& row : table.rows)
-        {
-            if (stmt.where && !to_bool(evaluate_expression(stmt.where, table, row, *storage_)))
-            {
-                continue;
-            }
-
-            Row projected_row;
-            projected_row.reserve(selected_indexes.size());
-            for (const auto index : selected_indexes)
-            {
-                projected_row.push_back(row[index]);
-            }
-            result_rows.push_back(std::move(projected_row));
-        }
-
-        std::vector<std::size_t> widths(selected_names.size(), 0);
-        for (std::size_t i = 0; i < selected_names.size(); ++i)
-        {
-            widths[i] = selected_names[i].size();
-        }
-        for (const auto& row : result_rows)
+        for (const auto& row : result.rows)
         {
             for (std::size_t i = 0; i < row.size(); ++i)
             {
@@ -626,14 +694,14 @@ namespace sql
 
         const auto separator = make_separator(widths);
         output_ << separator << '\n';
-        write_row(output_, selected_names, widths);
+        write_row(output_, result.column_names, widths);
         output_ << separator << '\n';
-        for (const auto& row : result_rows)
+        for (const auto& row : result.rows)
         {
             write_row(output_, row, widths);
         }
         output_ << separator << '\n';
-        output_ << result_rows.size() << " row(s) selected\n";
+        output_ << result.rows.size() << " row(s) selected\n";
     }
 
     void Executor::execute_update(const UpdateStatement& stmt)
