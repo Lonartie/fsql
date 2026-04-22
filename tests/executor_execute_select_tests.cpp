@@ -197,6 +197,78 @@ TEST_CASE("supports MIN and MAX on text projections")
     CHECK(text.find("1 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("groups rows and filters groups with HAVING")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (team, owner, points, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('ops', 'alice', 8, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('ops', 'bob', 5, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('docs', 'cara', 3, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('docs', 'dave', 4, true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('sec', 'erin', 9, false);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT team, COUNT(*), SUM(points), AVG(points) "
+        "FROM tasks WHERE done = false "
+        "GROUP BY team HAVING COUNT(*) >= 2 "
+        "ORDER BY SUM(points) DESC, team ASC;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("| ops  | 2        | 13          | 6.5         |") != std::string::npos);
+    CHECK(text.find("| docs |") == std::string::npos);
+    CHECK(text.find("| sec  |") == std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("supports grouped expressions built from grouping columns")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (team, points);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('ops', 4);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('ops', 6);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('docs', 3);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('docs', 7);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT team + '-total', SUM(points) "
+        "FROM tasks GROUP BY team "
+        "ORDER BY SUM(points) DESC, team ASC;"));
+
+    const auto text = context.output.str();
+    const auto ops = text.find("ops-total");
+    const auto docs = text.find("docs-total");
+    REQUIRE(ops != std::string::npos);
+    REQUIRE(docs != std::string::npos);
+    CHECK(docs < ops);
+    CHECK(text.find("10") != std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("rejects non grouped columns in grouped queries")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (team, owner, points);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('ops', 'alice', 5);"));
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT team, owner, COUNT(*) FROM tasks GROUP BY team;")), std::runtime_error);
+}
+
+TEST_CASE("rejects unsupported group by expressions and HAVING without grouping")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (team, points);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('ops', 5);"));
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT team, COUNT(*) FROM tasks GROUP BY team + '!';")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT team FROM tasks HAVING COUNT(*) > 0;")), std::runtime_error);
+}
+
 TEST_CASE("rejects mixing aggregate and non aggregate projections without grouping")
 {
     sql_test::ExecutorContext context;

@@ -113,6 +113,27 @@ TEST_CASE("parses select result shaping clauses")
     CHECK_EQ(*statement.select.offset, 2U);
 }
 
+TEST_CASE("parses group by and having clauses")
+{
+    const auto statement = sql_test::parse_statement("SELECT team, COUNT(*), SUM(points) FROM tasks WHERE done = false GROUP BY team HAVING COUNT(*) >= 2 ORDER BY SUM(points) DESC;");
+
+    CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
+    CHECK_FALSE(statement.select.select_all);
+    REQUIRE_EQ(statement.select.projections.size(), 3U);
+    REQUIRE_EQ(statement.select.group_by.size(), 1U);
+    REQUIRE(statement.select.group_by[0] != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.group_by[0]->kind), static_cast<int>(sql::ExpressionKind::Identifier));
+    CHECK_EQ(statement.select.group_by[0]->text, "team");
+    REQUIRE(statement.select.having != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.having->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(statement.select.having->binary_operator), static_cast<int>(sql::BinaryOperator::GreaterEqual));
+    REQUIRE_EQ(statement.select.order_by.size(), 1U);
+    REQUIRE(statement.select.order_by[0].expression != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.order_by[0].expression->kind), static_cast<int>(sql::ExpressionKind::FunctionCall));
+    CHECK_EQ(statement.select.order_by[0].expression->text, "SUM");
+    CHECK(statement.select.order_by[0].descending);
+}
+
 TEST_CASE("parses UNIQUE synonym for DISTINCT")
 {
     const auto statement = sql_test::parse_statement("SELECT UNIQUE category FROM todos ORDER BY category;");

@@ -159,6 +159,17 @@ namespace sql
             stmt.where = parse_expression();
         }
 
+        if (match_keyword("GROUP"))
+        {
+            expect_keyword("BY");
+            stmt.group_by = parse_expression_list();
+        }
+
+        if (match_keyword("HAVING"))
+        {
+            stmt.having = parse_expression();
+        }
+
         if (match_keyword("ORDER"))
         {
             expect_keyword("BY");

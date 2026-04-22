@@ -233,6 +233,12 @@ namespace sql
         /// @brief Optional filter expression.
         ExpressionPtr where;
 
+        /// @brief Optional GROUP BY expressions.
+        std::vector<ExpressionPtr> group_by;
+
+        /// @brief Optional HAVING filter applied after grouping.
+        ExpressionPtr having;
+
         /// @brief Optional ORDER BY terms.
         std::vector<SelectOrderBy> order_by;
 

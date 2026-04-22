@@ -5,7 +5,7 @@
 - CREATE VIEW / DROP VIEW command
 - SELECT from multiple sources (tables and subqueries)
     - Addressing columns by table name (e.g. table1.column1) to avoid ambiguity
-- JOINs, GROUP BY, HAVING
+- JOINs
 - UNION, UNION ALL, INTERSECT, EXCEPT
 - EXISTS, IN, ANY, ALL
 - IS NULL, IS NOT NULL (whole null-semantics)
@@ -39,3 +39,6 @@
   - BETWEEN
   - LIKE
   - REGEXP
+- Single-table grouped aggregation:
+  - GROUP BY
+  - HAVING

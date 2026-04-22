@@ -196,5 +196,41 @@ TEST_CASE("combines distinct ordering and pagination in a larger review workflow
     CHECK(text.find("2 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("summarizes changing workloads with grouping having ordering and pagination")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE incidents (service, team, severity, hours, resolved, escalations);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES ('billing', 'ops', 9, 5, false, 2);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES ('search', 'ops', 7, 4, false, 1);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES ('docs', 'docs', 3, 2, false, 0);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES ('auth', 'sec', 8, 6, false, 3);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES ('cdn', 'ops', 4, 1, true, 0);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES ('portal', 'docs', 6, 5, false, 2);"));
+
+    context.executor.execute(sql_test::parse_statement(
+        "UPDATE incidents SET resolved = true "
+        "WHERE severity BETWEEN 8 AND 9 OR escalations >= 3;"));
+
+    const auto after_update = context.storage->load_table("incidents");
+    REQUIRE_EQ(after_update.rows.size(), 6U);
+    CHECK_EQ(after_update.rows[0][4], "true");
+    CHECK_EQ(after_update.rows[3][4], "true");
+    CHECK_EQ(after_update.rows[5][4], "false");
+
+    context.reset_output();
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT team, COUNT(*), SUM(hours), MAX(severity) "
+        "FROM incidents WHERE resolved = false "
+        "GROUP BY team HAVING SUM(hours) >= 5 "
+        "ORDER BY SUM(hours) DESC, team ASC LIMIT 2 OFFSET 0;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("| docs | 2        | 7          | 6             |") != std::string::npos);
+    CHECK(text.find("| ops  | 1        | 4          | 7             |") == std::string::npos);
+    CHECK(text.find("| sec  |") == std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
 TEST_SUITE_END();
 

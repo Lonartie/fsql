@@ -12,7 +12,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iomanip>
+#include <map>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -38,6 +40,12 @@ namespace sql
         {
             Row values;
             std::vector<EvaluatedValue> order_values;
+        };
+
+        struct SelectGroup
+        {
+            const Row* representative = nullptr;
+            std::vector<const Row*> rows;
         };
 
         struct ParsedColumnMetadata
@@ -186,6 +194,8 @@ namespace sql
 
         EvaluatedValue evaluate_expression(const ExpressionPtr& expression, const Table& table, const Row& row, const IStorage& storage);
 
+        EvaluatedValue evaluate_select_expression(const SelectStatement& stmt, const IStorage& storage);
+
         std::string serialize_select_statement(const SelectStatement& statement)
         {
             std::ostringstream stream;
@@ -214,6 +224,24 @@ namespace sql
             if (statement.where)
             {
                 stream << " WHERE " << serialize_expression(statement.where);
+            }
+
+            if (!statement.group_by.empty())
+            {
+                stream << " GROUP BY ";
+                for (std::size_t i = 0; i < statement.group_by.size(); ++i)
+                {
+                    if (i > 0)
+                    {
+                        stream << ", ";
+                    }
+                    stream << serialize_expression(statement.group_by[i]);
+                }
+            }
+
+            if (statement.having)
+            {
+                stream << " HAVING " << serialize_expression(statement.having);
             }
 
             if (!statement.order_by.empty())
@@ -590,6 +618,70 @@ namespace sql
             }
         }
 
+        std::set<std::string> collect_group_by_identifiers(const SelectStatement& stmt, const Table& table, const IStorage& storage)
+        {
+            std::set<std::string> identifiers;
+            for (const auto& expression : stmt.group_by)
+            {
+                if (!expression || expression->kind != ExpressionKind::Identifier)
+                {
+                    fail("GROUP BY currently only supports column identifiers");
+                }
+
+                static_cast<void>(storage.column_index(table, expression->text));
+                identifiers.insert(expression->text);
+            }
+            return identifiers;
+        }
+
+        void validate_grouped_expression(const ExpressionPtr& expression,
+                                         const Table& table,
+                                         const IStorage& storage,
+                                         const std::set<std::string>& group_by_identifiers,
+                                         bool inside_aggregate = false)
+        {
+            if (!expression)
+            {
+                return;
+            }
+
+            switch (expression->kind)
+            {
+            case ExpressionKind::Literal:
+            case ExpressionKind::Select:
+                return;
+            case ExpressionKind::Identifier:
+                static_cast<void>(storage.column_index(table, expression->text));
+                if (!inside_aggregate && !group_by_identifiers.contains(expression->text))
+                {
+                    fail("Grouped query references non-grouped column '" + expression->text + "'");
+                }
+                return;
+            case ExpressionKind::FunctionCall:
+                if (is_aggregate_function_name(expression->text))
+                {
+                    for (const auto& argument : expression->arguments)
+                    {
+                        validate_grouped_expression(argument, table, storage, group_by_identifiers, true);
+                    }
+                    return;
+                }
+
+                for (const auto& argument : expression->arguments)
+                {
+                    validate_grouped_expression(argument, table, storage, group_by_identifiers, inside_aggregate);
+                }
+                return;
+            case ExpressionKind::Unary:
+                validate_grouped_expression(expression->left, table, storage, group_by_identifiers, inside_aggregate);
+                return;
+            case ExpressionKind::Binary:
+                validate_grouped_expression(expression->left, table, storage, group_by_identifiers, inside_aggregate);
+                validate_grouped_expression(expression->right, table, storage, group_by_identifiers, inside_aggregate);
+                return;
+            }
+        }
+
         std::vector<const Row*> filter_rows(const Table& table, const ExpressionPtr& where, const IStorage& storage)
         {
             std::vector<const Row*> rows;
@@ -717,10 +809,211 @@ namespace sql
             return has_best ? make_text(best.text) : make_text("");
         }
 
+        EvaluatedValue evaluate_grouped_expression(const ExpressionPtr& expression,
+                                                   const Table& table,
+                                                   const Row& representative_row,
+                                                   const std::vector<const Row*>& rows,
+                                                   const IStorage& storage)
+        {
+            if (!expression)
+            {
+                return make_text("");
+            }
+
+            switch (expression->kind)
+            {
+            case ExpressionKind::Literal:
+                return make_text(expression->text);
+            case ExpressionKind::Identifier:
+            {
+                try
+                {
+                    const auto index = storage.column_index(table, expression->text);
+                    return make_text(representative_row[index]);
+                }
+                catch (const std::runtime_error&)
+                {
+                    return make_text(expression->text);
+                }
+            }
+            case ExpressionKind::Select:
+                if (!expression->select)
+                {
+                    fail("Missing SELECT expression payload");
+                }
+                return evaluate_select_expression(*expression->select, storage);
+            case ExpressionKind::FunctionCall:
+                if (is_aggregate_function_name(expression->text))
+                {
+                    return evaluate_aggregate_function(expression, table, rows, storage);
+                }
+                return evaluate_function(*expression);
+            case ExpressionKind::Unary:
+            {
+                const auto operand = evaluate_grouped_expression(expression->left, table, representative_row, rows, storage);
+                switch (expression->unary_operator)
+                {
+                case UnaryOperator::Plus:
+                    return make_numeric(operand.numeric ? operand.number : std::stod(operand.text));
+                case UnaryOperator::Minus:
+                    return make_numeric(-(operand.numeric ? operand.number : std::stod(operand.text)));
+                case UnaryOperator::LogicalNot:
+                    return make_numeric(to_bool(operand) ? 0.0 : 1.0);
+                case UnaryOperator::BitwiseNot:
+                    return make_numeric(static_cast<double>(~to_integer(operand)));
+                }
+                break;
+            }
+            case ExpressionKind::Binary:
+            {
+                const auto left = evaluate_grouped_expression(expression->left, table, representative_row, rows, storage);
+                const auto right = evaluate_grouped_expression(expression->right, table, representative_row, rows, storage);
+                switch (expression->binary_operator)
+                {
+                case BinaryOperator::Multiply: return make_numeric((left.numeric ? left.number : std::stod(left.text)) * (right.numeric ? right.number : std::stod(right.text)));
+                case BinaryOperator::Divide: return make_numeric((left.numeric ? left.number : std::stod(left.text)) / (right.numeric ? right.number : std::stod(right.text)));
+                case BinaryOperator::Modulo: return make_numeric(static_cast<double>(to_integer(left) % to_integer(right)));
+                case BinaryOperator::Add:
+                    if (left.numeric && right.numeric)
+                    {
+                        return make_numeric(left.number + right.number);
+                    }
+                    return make_text(left.text + right.text);
+                case BinaryOperator::Subtract: return make_numeric((left.numeric ? left.number : std::stod(left.text)) - (right.numeric ? right.number : std::stod(right.text)));
+                case BinaryOperator::Less:
+                    return make_numeric(((left.numeric && right.numeric) ? (left.number < right.number) : (left.text < right.text)) ? 1.0 : 0.0);
+                case BinaryOperator::LessEqual:
+                    return make_numeric(((left.numeric && right.numeric) ? (left.number <= right.number) : (left.text <= right.text)) ? 1.0 : 0.0);
+                case BinaryOperator::Greater:
+                    return make_numeric(((left.numeric && right.numeric) ? (left.number > right.number) : (left.text > right.text)) ? 1.0 : 0.0);
+                case BinaryOperator::GreaterEqual:
+                    return make_numeric(((left.numeric && right.numeric) ? (left.number >= right.number) : (left.text >= right.text)) ? 1.0 : 0.0);
+                case BinaryOperator::Like:
+                    return make_numeric(like_matches(left.text, right.text) ? 1.0 : 0.0);
+                case BinaryOperator::Regexp:
+                    try
+                    {
+                        return make_numeric(std::regex_search(left.text, std::regex(right.text)) ? 1.0 : 0.0);
+                    }
+                    catch (const std::regex_error&)
+                    {
+                        fail("Invalid REGEXP pattern '" + right.text + "'");
+                    }
+                case BinaryOperator::Equal:
+                    return make_numeric(((left.numeric && right.numeric) ? (std::fabs(left.number - right.number) < 1e-9) : (left.text == right.text)) ? 1.0 : 0.0);
+                case BinaryOperator::NotEqual:
+                    return make_numeric(((left.numeric && right.numeric) ? (std::fabs(left.number - right.number) >= 1e-9) : (left.text != right.text)) ? 1.0 : 0.0);
+                case BinaryOperator::BitwiseAnd: return make_numeric(static_cast<double>(to_integer(left) & to_integer(right)));
+                case BinaryOperator::BitwiseXor: return make_numeric(static_cast<double>(to_integer(left) ^ to_integer(right)));
+                case BinaryOperator::BitwiseOr: return make_numeric(static_cast<double>(to_integer(left) | to_integer(right)));
+                case BinaryOperator::LogicalAnd: return make_numeric((to_bool(left) && to_bool(right)) ? 1.0 : 0.0);
+                case BinaryOperator::LogicalOr: return make_numeric((to_bool(left) || to_bool(right)) ? 1.0 : 0.0);
+                }
+                break;
+            }
+            }
+
+            fail("Unsupported grouped expression");
+        }
+
+        std::vector<SelectGroup> build_select_groups(const SelectStatement& stmt,
+                                                     const Table& table,
+                                                     const std::vector<const Row*>& rows,
+                                                     const IStorage& storage)
+        {
+            std::vector<SelectGroup> groups;
+            std::map<Row, std::size_t> key_to_group_index;
+
+            for (const auto* row : rows)
+            {
+                Row key;
+                key.reserve(stmt.group_by.size());
+                for (const auto& expression : stmt.group_by)
+                {
+                    key.push_back(evaluate_expression(expression, table, *row, storage).text);
+                }
+
+                const auto [iterator, inserted] = key_to_group_index.emplace(key, groups.size());
+                if (inserted)
+                {
+                    SelectGroup group;
+                    group.representative = row;
+                    groups.push_back(std::move(group));
+                }
+                groups[iterator->second].rows.push_back(row);
+            }
+
+            return groups;
+        }
+
         SelectResult run_select_statement(const SelectStatement& stmt, const IStorage& storage)
         {
             const Table table = storage.load_table(stmt.table_name);
             const auto rows = filter_rows(table, stmt.where, storage);
+
+            if (stmt.having && stmt.group_by.empty())
+            {
+                fail("HAVING requires GROUP BY");
+            }
+
+            if (!stmt.group_by.empty())
+            {
+                if (stmt.select_all)
+                {
+                    fail("SELECT * is not supported with GROUP BY");
+                }
+
+                const auto group_by_identifiers = collect_group_by_identifiers(stmt, table, storage);
+                SelectResult result;
+                for (const auto& projection : stmt.projections)
+                {
+                    validate_grouped_expression(projection, table, storage, group_by_identifiers);
+                    result.column_names.push_back(serialize_expression(projection));
+                }
+
+                for (const auto& order_by : stmt.order_by)
+                {
+                    validate_grouped_expression(order_by.expression, table, storage, group_by_identifiers);
+                }
+
+                if (stmt.having)
+                {
+                    validate_grouped_expression(stmt.having, table, storage, group_by_identifiers);
+                }
+
+                std::vector<ProjectedSelectRow> projected_rows;
+                const auto groups = build_select_groups(stmt, table, rows, storage);
+                projected_rows.reserve(groups.size());
+
+                for (const auto& group : groups)
+                {
+                    if (stmt.having && !to_bool(evaluate_grouped_expression(stmt.having, table, *group.representative, group.rows, storage)))
+                    {
+                        continue;
+                    }
+
+                    ProjectedSelectRow projected_row;
+                    projected_row.values.reserve(stmt.projections.size());
+                    for (const auto& projection : stmt.projections)
+                    {
+                        projected_row.values.push_back(evaluate_grouped_expression(projection, table, *group.representative, group.rows, storage).text);
+                    }
+                    projected_row.order_values.reserve(stmt.order_by.size());
+                    for (const auto& order_by : stmt.order_by)
+                    {
+                        projected_row.order_values.push_back(evaluate_grouped_expression(order_by.expression, table, *group.representative, group.rows, storage));
+                    }
+                    projected_rows.push_back(std::move(projected_row));
+                }
+
+                apply_select_modifiers(stmt, projected_rows);
+                result.rows.reserve(projected_rows.size());
+                for (auto& projected_row : projected_rows)
+                {
+                    result.rows.push_back(std::move(projected_row.values));
+                }
+                return result;
+            }
 
             for (const auto& order_by : stmt.order_by)
             {
