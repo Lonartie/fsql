@@ -28,6 +28,9 @@ namespace sql
         /// @brief Parses a `CREATE TABLE` statement.
         Statement parse_create();
 
+        /// @brief Parses an `ALTER TABLE` statement.
+        Statement parse_alter();
+
         /// @brief Parses a `DROP TABLE` statement.
         Statement parse_drop();
 

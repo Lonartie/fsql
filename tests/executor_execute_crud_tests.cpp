@@ -80,6 +80,37 @@ TEST_CASE("rejects unknown columns")
     CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("INSERT INTO todos (missing) VALUES (true);")), std::runtime_error);
 }
 
+TEST_CASE("alter table rename column keeps data accessible under new name")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, archived_at);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk', '2026-04-22');"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE todos RENAME COLUMN archived_at TO closed_at;"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT closed_at FROM todos;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("2026-04-22") != std::string::npos);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT archived_at FROM todos;")), std::runtime_error);
+}
+
+TEST_CASE("alter table drop column removes stored values")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, category, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk', 'home', true);"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE todos DROP COLUMN category;"));
+
+    const auto table = context.storage->load_table("todos");
+    REQUIRE_EQ(table.columns.size(), 2U);
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "Buy milk");
+    CHECK_EQ(table.rows[0][1], "true");
+}
+
 TEST_CASE("rejects mismatched insert value counts")
 {
     sql_test::ExecutorContext context;
@@ -87,6 +118,22 @@ TEST_CASE("rejects mismatched insert value counts")
     context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, done);"));
     CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk');")), std::runtime_error);
     CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("INSERT INTO todos (title) VALUES ('Buy milk', true);")), std::runtime_error);
+}
+
+TEST_CASE("rejects invalid alter table operations")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (id AUTO_INCREMENT, title);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES (1, 'Buy milk');"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE notes (id, title);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO notes VALUES ('x', 'bad');"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE single (only_col);"));
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("ALTER TABLE todos ADD COLUMN title;")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("ALTER TABLE single DROP COLUMN only_col;")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("ALTER TABLE todos ALTER COLUMN title SET AUTO_INCREMENT;")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("ALTER TABLE notes ALTER COLUMN id SET AUTO_INCREMENT;")), std::runtime_error);
 }
 
 TEST_CASE("rejects operations on missing tables")

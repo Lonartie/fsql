@@ -664,6 +664,85 @@ namespace sql
             return metadata;
         }
 
+        std::string serialize_column_metadata(const ParsedColumnMetadata& metadata)
+        {
+            std::string stored_name = metadata.visible_name;
+            if (metadata.auto_increment)
+            {
+                stored_name += " AUTO_INCREMENT";
+            }
+            if (!metadata.default_expression.empty())
+            {
+                stored_name += " DEFAULT(" + metadata.default_expression + ")";
+            }
+            return stored_name;
+        }
+
+        bool has_visible_column_name(const Table& table, const std::string& column_name, std::optional<std::size_t> skip_index = std::nullopt)
+        {
+            for (std::size_t i = 0; i < table.columns.size(); ++i)
+            {
+                if (skip_index.has_value() && *skip_index == i)
+                {
+                    continue;
+                }
+                if (iequals(parse_column_metadata(table.columns[i]).visible_name, column_name))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void ensure_single_auto_increment_column(const Table& table, std::optional<std::size_t> skip_index = std::nullopt)
+        {
+            std::size_t count = 0;
+            for (std::size_t i = 0; i < table.columns.size(); ++i)
+            {
+                if (skip_index.has_value() && *skip_index == i)
+                {
+                    continue;
+                }
+                if (parse_column_metadata(table.columns[i]).auto_increment)
+                {
+                    ++count;
+                }
+            }
+            if (count > 1)
+            {
+                fail("Only one AUTO_INCREMENT column is supported");
+            }
+        }
+
+        void backfill_auto_increment_column(Table& table, std::size_t index)
+        {
+            long long maximum = 0;
+            for (const auto& row : table.rows)
+            {
+                if (row[index].empty() || is_stored_null(row[index]))
+                {
+                    continue;
+                }
+                try
+                {
+                    maximum = std::max(maximum, std::stoll(row[index]));
+                }
+                catch (const std::exception&)
+                {
+                    fail("AUTO_INCREMENT column requires numeric existing values");
+                }
+            }
+
+            for (auto& row : table.rows)
+            {
+                if (!row[index].empty() && !is_stored_null(row[index]))
+                {
+                    continue;
+                }
+                row[index] = std::to_string(++maximum);
+            }
+        }
+
         std::optional<std::size_t> auto_increment_column_index(const Table& table)
         {
             for (std::size_t i = 0; i < table.columns.size(); ++i)
@@ -686,7 +765,7 @@ namespace sql
             long long maximum = 0;
             for (const auto& row : table.rows)
             {
-                if (row[index].empty())
+                if (row[index].empty() || is_stored_null(row[index]))
                 {
                     continue;
                 }
@@ -1762,6 +1841,9 @@ namespace sql
     {
         switch (statement.kind)
         {
+        case Statement::Kind::Alter:
+            execute_alter(statement.alter);
+            break;
         case Statement::Kind::Create:
             execute_create(statement.create);
             break;
@@ -1780,6 +1862,150 @@ namespace sql
         case Statement::Kind::Update:
             execute_update(statement.update);
             break;
+        }
+    }
+
+    void Executor::execute_alter(const AlterStatement& stmt)
+    {
+        Table table = storage_->load_table(stmt.table_name);
+
+        auto find_column_index = [&]() -> std::size_t
+        {
+            return storage_->column_index(table, stmt.column_name);
+        };
+
+        switch (stmt.action)
+        {
+        case AlterAction::AddColumn:
+        {
+            if (stmt.column.name.empty())
+            {
+                fail("ALTER TABLE ADD COLUMN requires a column name");
+            }
+            if (has_visible_column_name(table, stmt.column.name))
+            {
+                fail("Column already exists: " + stmt.column.name);
+            }
+
+            ParsedColumnMetadata metadata;
+            metadata.visible_name = stmt.column.name;
+            metadata.auto_increment = stmt.column.auto_increment;
+            if (stmt.column.default_value)
+            {
+                metadata.default_expression = serialize_expression(stmt.column.default_value);
+            }
+
+            table.columns.push_back(serialize_column_metadata(metadata));
+            for (auto& row : table.rows)
+            {
+                if (stmt.column.default_value)
+                {
+                    row.push_back(evaluate_value(stmt.column.default_value, *storage_));
+                }
+                else
+                {
+                    row.emplace_back();
+                }
+            }
+
+            if (metadata.auto_increment)
+            {
+                ensure_single_auto_increment_column(table);
+                backfill_auto_increment_column(table, table.columns.size() - 1);
+            }
+
+            storage_->save_table(table);
+            output_ << "Altered table '" << stmt.table_name << "'\n";
+            return;
+        }
+        case AlterAction::DropColumn:
+        {
+            if (table.columns.size() <= 1)
+            {
+                fail("ALTER TABLE DROP COLUMN cannot remove the last column");
+            }
+
+            const auto index = find_column_index();
+            table.columns.erase(table.columns.begin() + static_cast<std::ptrdiff_t>(index));
+            for (auto& row : table.rows)
+            {
+                row.erase(row.begin() + static_cast<std::ptrdiff_t>(index));
+            }
+
+            storage_->save_table(table);
+            output_ << "Altered table '" << stmt.table_name << "'\n";
+            return;
+        }
+        case AlterAction::RenameColumn:
+        {
+            const auto index = find_column_index();
+            if (stmt.new_name.empty())
+            {
+                fail("ALTER TABLE RENAME COLUMN requires a new column name");
+            }
+            if (has_visible_column_name(table, stmt.new_name, index))
+            {
+                fail("Column already exists: " + stmt.new_name);
+            }
+
+            auto metadata = parse_column_metadata(table.columns[index]);
+            metadata.visible_name = stmt.new_name;
+            table.columns[index] = serialize_column_metadata(metadata);
+
+            storage_->save_table(table);
+            output_ << "Altered table '" << stmt.table_name << "'\n";
+            return;
+        }
+        case AlterAction::SetDefault:
+        {
+            const auto index = find_column_index();
+            auto metadata = parse_column_metadata(table.columns[index]);
+            if (!stmt.column.default_value)
+            {
+                fail("ALTER COLUMN SET DEFAULT requires an expression");
+            }
+            metadata.default_expression = serialize_expression(stmt.column.default_value);
+            table.columns[index] = serialize_column_metadata(metadata);
+
+            storage_->save_table(table);
+            output_ << "Altered table '" << stmt.table_name << "'\n";
+            return;
+        }
+        case AlterAction::DropDefault:
+        {
+            const auto index = find_column_index();
+            auto metadata = parse_column_metadata(table.columns[index]);
+            metadata.default_expression.clear();
+            table.columns[index] = serialize_column_metadata(metadata);
+
+            storage_->save_table(table);
+            output_ << "Altered table '" << stmt.table_name << "'\n";
+            return;
+        }
+        case AlterAction::SetAutoIncrement:
+        {
+            const auto index = find_column_index();
+            auto metadata = parse_column_metadata(table.columns[index]);
+            metadata.auto_increment = true;
+            table.columns[index] = serialize_column_metadata(metadata);
+            ensure_single_auto_increment_column(table);
+            backfill_auto_increment_column(table, index);
+
+            storage_->save_table(table);
+            output_ << "Altered table '" << stmt.table_name << "'\n";
+            return;
+        }
+        case AlterAction::DropAutoIncrement:
+        {
+            const auto index = find_column_index();
+            auto metadata = parse_column_metadata(table.columns[index]);
+            metadata.auto_increment = false;
+            table.columns[index] = serialize_column_metadata(metadata);
+
+            storage_->save_table(table);
+            output_ << "Altered table '" << stmt.table_name << "'\n";
+            return;
+        }
         }
     }
 

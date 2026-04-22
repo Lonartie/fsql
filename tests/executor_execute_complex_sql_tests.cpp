@@ -382,5 +382,42 @@ TEST_CASE("uses NULL values in a larger archival workflow")
     CHECK(text.find("2 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("uses multiple alter table actions in a staged schema evolution workflow")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (id, title);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (1, 'Patch release');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('', 'Write docs');"));
+
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE tasks ALTER COLUMN id SET AUTO_INCREMENT;"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE tasks ADD COLUMN category = 'backlog';"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE tasks ADD COLUMN archived_at = NULL;"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE tasks RENAME COLUMN archived_at TO closed_at;"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE tasks ALTER COLUMN category SET DEFAULT 'general';"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE tasks DROP COLUMN closed_at;"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks (title) VALUES ('Rotate keys');"));
+
+    const auto table = context.storage->load_table("tasks");
+    REQUIRE_EQ(table.columns.size(), 3U);
+    REQUIRE_EQ(table.rows.size(), 3U);
+    CHECK_EQ(table.rows[0][0], "1");
+    CHECK_EQ(table.rows[1][0], "2");
+    CHECK_EQ(table.rows[2][0], "3");
+    CHECK_EQ(table.rows[0][2], "backlog");
+    CHECK_EQ(table.rows[1][2], "backlog");
+    CHECK_EQ(table.rows[2][2], "general");
+
+    context.reset_output();
+    context.executor.execute(sql_test::parse_statement("SELECT id, title, category FROM tasks ORDER BY id;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Write docs") != std::string::npos);
+    CHECK(text.find("Rotate keys") != std::string::npos);
+    CHECK(text.find("general") != std::string::npos);
+    CHECK(text.find("3 row(s) selected") != std::string::npos);
+}
+
 TEST_SUITE_END();
 

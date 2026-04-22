@@ -79,5 +79,54 @@ TEST_CASE("supports SELECT subqueries in default expressions")
     CHECK_EQ(table.rows[0][0], "fallback");
 }
 
+TEST_CASE("alter table add column backfills existing rows with default values")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Write docs');"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE todos ADD COLUMN category = 'backlog';"));
+
+    const auto table = context.storage->load_table("todos");
+    REQUIRE_EQ(table.rows.size(), 2U);
+    CHECK_EQ(table.rows[0][1], "backlog");
+    CHECK_EQ(table.rows[1][1], "backlog");
+}
+
+TEST_CASE("alter table set and drop default affects future inserts")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, category);"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE todos ALTER COLUMN category SET DEFAULT 'backlog';"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos (title) VALUES ('Buy milk');"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE todos ALTER COLUMN category DROP DEFAULT;"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos (title, category) VALUES ('Write docs', 'docs');"));
+
+    const auto table = context.storage->load_table("todos");
+    REQUIRE_EQ(table.rows.size(), 2U);
+    CHECK_EQ(table.rows[0][1], "backlog");
+    CHECK_EQ(table.rows[1][1], "docs");
+    CHECK(table.columns[1].find("DEFAULT(") == std::string::npos);
+}
+
+TEST_CASE("alter table can enable auto increment on an existing column")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (id, title);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('', 'Buy milk');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES (5, 'Write docs');"));
+    context.executor.execute(sql_test::parse_statement("ALTER TABLE todos ALTER COLUMN id SET AUTO_INCREMENT;"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos (title) VALUES ('Patch release');"));
+
+    const auto table = context.storage->load_table("todos");
+    REQUIRE_EQ(table.rows.size(), 3U);
+    CHECK_EQ(table.rows[0][0], "6");
+    CHECK_EQ(table.rows[1][0], "5");
+    CHECK_EQ(table.rows[2][0], "7");
+}
+
 TEST_SUITE_END();
 

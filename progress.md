@@ -1,7 +1,6 @@
 # Features
 
 ## Planned
-- ALTER TABLE command
 - CREATE VIEW / DROP VIEW command
 - JOINs
 - UNION, UNION ALL, INTERSECT, EXCEPT
@@ -20,6 +19,8 @@
 - Align default value syntax with SQL standard (e.g. DEFAULT 'value' instead of = 'value')
 - More powerful subqueries returning lists of values
   - Additional list-returning predicate forms and broader subquery semantics
+- Overhaul main help page and README
+- Create SYNTAX.md with detailed syntax documentation since this project is not real SQL
 
 ## In Progress
 
@@ -53,3 +54,8 @@
   - NULL literal
   - IS NULL
   - IS NOT NULL
+- ALTER TABLE command:
+  - ADD COLUMN
+  - DROP COLUMN
+  - RENAME COLUMN
+  - ALTER COLUMN defaults and AUTO_INCREMENT metadata

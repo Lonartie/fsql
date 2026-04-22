@@ -29,6 +29,9 @@ namespace sql
         /// @brief Executes `CREATE TABLE`.
         void execute_create(const CreateStatement& stmt);
 
+        /// @brief Executes `ALTER TABLE`.
+        void execute_alter(const AlterStatement& stmt);
+
         /// @brief Executes `DROP TABLE`.
         void execute_drop(const DropStatement& stmt);
 

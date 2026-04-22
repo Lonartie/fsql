@@ -65,6 +65,40 @@ TEST_CASE("parses update assignments")
     CHECK_EQ(static_cast<int>(statement.update.where->kind), static_cast<int>(sql::ExpressionKind::Binary));
 }
 
+TEST_CASE("parses alter table actions")
+{
+    const auto add_statement = sql_test::parse_statement("ALTER TABLE todos ADD COLUMN archived_at = NULL;");
+    CHECK_EQ(static_cast<int>(add_statement.kind), static_cast<int>(sql::Statement::Kind::Alter));
+    CHECK_EQ(static_cast<int>(add_statement.alter.action), static_cast<int>(sql::AlterAction::AddColumn));
+    CHECK_EQ(add_statement.alter.table_name, "todos");
+    CHECK_EQ(add_statement.alter.column.name, "archived_at");
+    REQUIRE(add_statement.alter.column.default_value != nullptr);
+    CHECK_EQ(static_cast<int>(add_statement.alter.column.default_value->kind), static_cast<int>(sql::ExpressionKind::Null));
+
+    const auto drop_statement = sql_test::parse_statement("ALTER TABLE todos DROP COLUMN archived_at;");
+    CHECK_EQ(static_cast<int>(drop_statement.alter.action), static_cast<int>(sql::AlterAction::DropColumn));
+    CHECK_EQ(drop_statement.alter.column_name, "archived_at");
+
+    const auto rename_statement = sql_test::parse_statement("ALTER TABLE todos RENAME COLUMN archived_at TO closed_at;");
+    CHECK_EQ(static_cast<int>(rename_statement.alter.action), static_cast<int>(sql::AlterAction::RenameColumn));
+    CHECK_EQ(rename_statement.alter.column_name, "archived_at");
+    CHECK_EQ(rename_statement.alter.new_name, "closed_at");
+
+    const auto set_default_statement = sql_test::parse_statement("ALTER TABLE todos ALTER COLUMN archived_at SET DEFAULT NOW();");
+    CHECK_EQ(static_cast<int>(set_default_statement.alter.action), static_cast<int>(sql::AlterAction::SetDefault));
+    REQUIRE(set_default_statement.alter.column.default_value != nullptr);
+    CHECK_EQ(set_default_statement.alter.column.default_value->text, "NOW");
+
+    const auto drop_default_statement = sql_test::parse_statement("ALTER TABLE todos ALTER COLUMN archived_at DROP DEFAULT;");
+    CHECK_EQ(static_cast<int>(drop_default_statement.alter.action), static_cast<int>(sql::AlterAction::DropDefault));
+
+    const auto set_auto_increment_statement = sql_test::parse_statement("ALTER TABLE todos ALTER COLUMN id SET AUTO_INCREMENT;");
+    CHECK_EQ(static_cast<int>(set_auto_increment_statement.alter.action), static_cast<int>(sql::AlterAction::SetAutoIncrement));
+
+    const auto drop_auto_increment_statement = sql_test::parse_statement("ALTER TABLE todos ALTER COLUMN id DROP AUTO_INCREMENT;");
+    CHECK_EQ(static_cast<int>(drop_auto_increment_statement.alter.action), static_cast<int>(sql::AlterAction::DropAutoIncrement));
+}
+
 TEST_CASE("accepts statements without semicolons")
 {
     const auto statement = sql_test::parse_statement("SELECT title FROM todos");

@@ -299,6 +299,37 @@ namespace sql
         ExpressionPtr where;
     };
 
+    /// @brief Supported ALTER TABLE actions.
+    enum class AlterAction
+    {
+        AddColumn,
+        DropColumn,
+        RenameColumn,
+        SetDefault,
+        DropDefault,
+        SetAutoIncrement,
+        DropAutoIncrement
+    };
+
+    /// @brief Parsed `ALTER TABLE` statement.
+    struct AlterStatement
+    {
+        /// @brief Target table name.
+        std::string table_name;
+
+        /// @brief Requested alter action.
+        AlterAction action = AlterAction::AddColumn;
+
+        /// @brief Target column name for non-add actions.
+        std::string column_name;
+
+        /// @brief Replacement or added column definition.
+        ColumnDefinition column;
+
+        /// @brief New column name for rename actions.
+        std::string new_name;
+    };
+
     /// @brief Represents a parsed SQL statement.
     struct Statement
     {
@@ -310,7 +341,8 @@ namespace sql
             Delete,
             Insert,
             Select,
-            Update
+            Update,
+            Alter
         } kind{};
 
         /// @brief `CREATE TABLE` payload.
@@ -330,5 +362,8 @@ namespace sql
 
         /// @brief `UPDATE` payload.
         UpdateStatement update;
+
+        /// @brief `ALTER TABLE` payload.
+        AlterStatement alter;
     };
 }

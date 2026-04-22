@@ -31,6 +31,10 @@ namespace sql
 
     Statement Parser::parse_statement()
     {
+        if (match_keyword("ALTER"))
+        {
+            return parse_alter();
+        }
         if (match_keyword("CREATE"))
         {
             return parse_create();
@@ -56,7 +60,88 @@ namespace sql
             return parse_update();
         }
 
-        fail("Expected CREATE, DROP, DELETE, INSERT, SELECT, or UPDATE");
+        fail("Expected ALTER, CREATE, DROP, DELETE, INSERT, SELECT, or UPDATE");
+    }
+
+    Statement Parser::parse_alter()
+    {
+        expect_keyword("TABLE");
+
+        AlterStatement stmt;
+        stmt.table_name = expect_identifier("Expected table name");
+
+        if (match_keyword("ADD"))
+        {
+            expect_keyword("COLUMN");
+            stmt.action = AlterAction::AddColumn;
+            stmt.column = parse_column_definition();
+        }
+        else if (match_keyword("DROP"))
+        {
+            expect_keyword("COLUMN");
+            stmt.action = AlterAction::DropColumn;
+            stmt.column_name = expect_identifier("Expected column name");
+        }
+        else if (match_keyword("RENAME"))
+        {
+            expect_keyword("COLUMN");
+            stmt.action = AlterAction::RenameColumn;
+            stmt.column_name = expect_identifier("Expected column name");
+            expect_keyword("TO");
+            stmt.new_name = expect_identifier("Expected new column name");
+        }
+        else if (match_keyword("ALTER"))
+        {
+            expect_keyword("COLUMN");
+            stmt.column_name = expect_identifier("Expected column name");
+            if (match_keyword("SET"))
+            {
+                if (match_keyword("DEFAULT"))
+                {
+                    stmt.action = AlterAction::SetDefault;
+                    stmt.column.default_value = parse_expression();
+                }
+                else if (match_keyword("AUTO_INCREMENT"))
+                {
+                    stmt.action = AlterAction::SetAutoIncrement;
+                }
+                else
+                {
+                    fail("Expected DEFAULT or AUTO_INCREMENT after ALTER COLUMN ... SET");
+                }
+            }
+            else if (match_keyword("DROP"))
+            {
+                if (match_keyword("DEFAULT"))
+                {
+                    stmt.action = AlterAction::DropDefault;
+                }
+                else if (match_keyword("AUTO_INCREMENT"))
+                {
+                    stmt.action = AlterAction::DropAutoIncrement;
+                }
+                else
+                {
+                    fail("Expected DEFAULT or AUTO_INCREMENT after ALTER COLUMN ... DROP");
+                }
+            }
+            else
+            {
+                fail("Expected SET or DROP after ALTER COLUMN");
+            }
+        }
+        else
+        {
+            fail("Expected ADD COLUMN, DROP COLUMN, RENAME COLUMN, or ALTER COLUMN");
+        }
+
+        consume_optional(TokenType::Semicolon);
+        expect(TokenType::End, "Unexpected tokens after ALTER TABLE");
+
+        Statement statement;
+        statement.kind = Statement::Kind::Alter;
+        statement.alter = std::move(stmt);
+        return statement;
     }
 
     Statement Parser::parse_create()
