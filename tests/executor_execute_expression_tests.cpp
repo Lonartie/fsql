@@ -1,4 +1,4 @@
-#include "doctest.h"
+ #include "doctest.h"
 
 #include "test_support.h"
 
@@ -113,6 +113,45 @@ TEST_CASE("supports SELECT subqueries in WHERE expressions")
     const auto text = context.output.str();
     CHECK(text.find("Write docs") != std::string::npos);
     CHECK(text.find("Buy milk") == std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("supports scalar SELECT subqueries with multiple sources")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 20);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (20, 'docs');"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE title = (SELECT tasks.title FROM tasks, teams WHERE tasks.team_id = teams.id AND teams.name = 'ops');"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Write docs") == std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("supports scalar SELECT subqueries with aliased source subqueries")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT (SELECT lookup.name FROM tasks t, (SELECT id, name FROM teams) lookup WHERE t.team_id = lookup.id) FROM tasks WHERE title = 'Patch release';"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("ops") != std::string::npos);
     CHECK(text.find("1 row(s) selected") != std::string::npos);
 }
 

@@ -34,6 +34,7 @@ namespace sql
         String,
         Number,
         Comma,
+        Dot,
         LParen,
         RParen,
         Semicolon,
@@ -215,11 +216,31 @@ namespace sql
         bool descending = false;
     };
 
+    /// @brief Parsed SELECT source.
+    struct SelectSource
+    {
+        /// @brief Supported source kinds.
+        enum class Kind
+        {
+            Table,
+            Subquery
+        } kind = Kind::Table;
+
+        /// @brief Table name when @ref kind is `Table`.
+        std::string name;
+
+        /// @brief Nested select statement when @ref kind is `Subquery`.
+        SelectStatementPtr subquery;
+
+        /// @brief Optional source alias.
+        std::optional<std::string> alias;
+    };
+
     /// @brief Parsed `SELECT` statement.
     struct SelectStatement
     {
-        /// @brief Target table name.
-        std::string table_name;
+        /// @brief Source tables or subqueries.
+        std::vector<SelectSource> sources;
 
         /// @brief Indicates whether duplicate projected rows should be removed.
         bool distinct = false;

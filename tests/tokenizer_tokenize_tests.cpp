@@ -45,6 +45,19 @@ TEST_CASE("supports doubled quotes inside strings")
     CHECK_EQ(tokens[5].text, "It's done");
 }
 
+TEST_CASE("tokenizes qualified identifiers and source dots")
+{
+    sql::Tokenizer tokenizer("SELECT tasks.title FROM tasks, teams WHERE tasks.team_id = teams.id;");
+    const auto tokens = tokenizer.tokenize();
+
+    CHECK_EQ(tokens[1].text, "tasks");
+    CHECK_EQ(static_cast<int>(tokens[2].type), static_cast<int>(sql::TokenType::Dot));
+    CHECK_EQ(tokens[3].text, "title");
+    CHECK_EQ(tokens[5].text, "tasks");
+    CHECK_EQ(static_cast<int>(tokens[6].type), static_cast<int>(sql::TokenType::Comma));
+    CHECK_EQ(tokens[7].text, "teams");
+}
+
 TEST_CASE("rejects unterminated strings")
 {
     sql::Tokenizer tokenizer("SELECT 'unterminated");

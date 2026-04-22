@@ -11,12 +11,27 @@ TEST_CASE("parses SELECT subquery as expression")
     REQUIRE(expression != nullptr);
     CHECK_EQ(static_cast<int>(expression->kind), static_cast<int>(sql::ExpressionKind::Select));
     REQUIRE(expression->select != nullptr);
-    CHECK_EQ(expression->select->table_name, "defaults");
+    REQUIRE_EQ(expression->select->sources.size(), 1U);
+    CHECK_EQ(expression->select->sources[0].name, "defaults");
     REQUIRE_EQ(expression->select->projections.size(), 1U);
     REQUIRE(expression->select->projections[0] != nullptr);
     CHECK_EQ(static_cast<int>(expression->select->projections[0]->kind), static_cast<int>(sql::ExpressionKind::Identifier));
     CHECK_EQ(expression->select->projections[0]->text, "category");
     CHECK(expression->select->where != nullptr);
+}
+
+TEST_CASE("parses SELECT subquery expression with multiple sources")
+{
+    const auto expression = sql_test::parse_expression("(SELECT tasks.title FROM tasks, teams WHERE tasks.team_id = teams.id AND teams.name = 'ops')");
+
+    REQUIRE(expression != nullptr);
+    REQUIRE(expression->select != nullptr);
+    REQUIRE_EQ(expression->select->sources.size(), 2U);
+    CHECK_EQ(expression->select->sources[0].name, "tasks");
+    CHECK_EQ(expression->select->sources[1].name, "teams");
+    REQUIRE_EQ(expression->select->projections.size(), 1U);
+    CHECK_EQ(expression->select->projections[0]->text, "tasks.title");
+    REQUIRE(expression->select->where != nullptr);
 }
 
 TEST_CASE("parses SQL keyword boolean operators")

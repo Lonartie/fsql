@@ -37,6 +37,72 @@ TEST_CASE("select where filters rows")
     CHECK(text.find("1 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("select supports multiple sources with qualified column references")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (id, title, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (1, 'Patch release', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (2, 'Write docs', 20);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (20, 'docs');"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT tasks.title, teams.name FROM tasks, teams WHERE tasks.team_id = teams.id ORDER BY tasks.title ASC;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("ops") != std::string::npos);
+    CHECK(text.find("Write docs") != std::string::npos);
+    CHECK(text.find("docs") != std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("select star qualifies headers for multiple sources")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (id, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (1, 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement("SELECT * FROM tasks, teams WHERE tasks.team_id = teams.id;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("tasks.id") != std::string::npos);
+    CHECK(text.find("tasks.team_id") != std::string::npos);
+    CHECK(text.find("teams.id") != std::string::npos);
+    CHECK(text.find("teams.name") != std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("select supports source subqueries with aliases")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 20);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (20, 'docs');"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT t.title, lookup.name FROM tasks t, (SELECT id, name FROM teams) lookup WHERE t.team_id = lookup.id ORDER BY t.title;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Write docs") != std::string::npos);
+    CHECK(text.find("ops") != std::string::npos);
+    CHECK(text.find("docs") != std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
 TEST_CASE("select all returns all columns")
 {
     sql_test::ExecutorContext context;
@@ -277,6 +343,20 @@ TEST_CASE("rejects mixing aggregate and non aggregate projections without groupi
     context.executor.execute(sql_test::parse_statement("INSERT INTO metrics VALUES ('ops', 10);"));
 
     CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT category, COUNT(*) FROM metrics;")), std::runtime_error);
+}
+
+TEST_CASE("rejects ambiguous and invalid multi source column references")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (id, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (1, 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT id FROM tasks, teams WHERE tasks.team_id = teams.id;")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT missing.name FROM tasks, teams;")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks, (SELECT id FROM teams);")), std::runtime_error);
 }
 
 TEST_SUITE_END();

@@ -71,6 +71,14 @@ namespace sql
         /// @return Parsed ORDER BY terms.
         std::vector<SelectOrderBy> parse_order_by_list();
 
+        /// @brief Parses a comma-separated FROM source list.
+        /// @return Parsed SELECT sources.
+        std::vector<SelectSource> parse_select_source_list();
+
+        /// @brief Parses a single FROM source.
+        /// @return Parsed source.
+        SelectSource parse_select_source();
+
         /// @brief Parses logical OR expressions.
         /// @return Parsed expression tree.
         ExpressionPtr parse_logical_or();
@@ -159,6 +167,11 @@ namespace sql
         /// @param message Error message if the next token is not an identifier.
         /// @return Identifier text.
         std::string expect_identifier(const std::string& message);
+
+        /// @brief Parses a possibly qualified identifier reference such as `source.column`.
+        /// @param message Error message if the next token is not an identifier.
+        /// @return Identifier path.
+        std::string parse_identifier_reference(const std::string& message);
 
         /// @brief Consumes a keyword.
         /// @param keyword Expected keyword.

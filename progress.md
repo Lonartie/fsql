@@ -3,8 +3,6 @@
 ## Planned
 - ALTER TABLE command
 - CREATE VIEW / DROP VIEW command
-- SELECT from multiple sources (tables and subqueries)
-    - Addressing columns by table name (e.g. table1.column1) to avoid ambiguity
 - JOINs
 - UNION, UNION ALL, INTERSECT, EXCEPT
 - EXISTS, IN, ANY, ALL
@@ -42,3 +40,7 @@
 - Single-table grouped aggregation:
   - GROUP BY
   - HAVING
+- Multi-source SELECTs:
+  - Multiple table sources in `FROM`
+  - Subquery sources in `FROM`
+  - Addressing columns by source name (e.g. `table1.column1`) to avoid ambiguity

@@ -44,6 +44,7 @@ namespace sql
                 switch (ch)
                 {
                 case ',': tokens.push_back({TokenType::Comma, ","}); break;
+                case '.': tokens.push_back({TokenType::Dot, "."}); break;
                 case '(': tokens.push_back({TokenType::LParen, "("}); break;
                 case ')': tokens.push_back({TokenType::RParen, ")"}); break;
                 case ';': tokens.push_back({TokenType::Semicolon, ";"}); break;

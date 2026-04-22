@@ -8,6 +8,23 @@
 
 namespace sql
 {
+    namespace
+    {
+        bool is_select_source_terminator(const Token& token)
+        {
+            return token.type == TokenType::Comma
+                || token.type == TokenType::Semicolon
+                || token.type == TokenType::End
+                || token.type == TokenType::RParen
+                || iequals(token.text, "WHERE")
+                || iequals(token.text, "GROUP")
+                || iequals(token.text, "HAVING")
+                || iequals(token.text, "ORDER")
+                || iequals(token.text, "LIMIT")
+                || iequals(token.text, "OFFSET");
+        }
+    }
+
     Parser::Parser(std::vector<Token> tokens) : tokens_(std::move(tokens))
     {
     }
@@ -153,7 +170,7 @@ namespace sql
         }
 
         expect_keyword("FROM");
-        stmt.table_name = expect_identifier("Expected table name");
+        stmt.sources = parse_select_source_list();
         if (match_keyword("WHERE"))
         {
             stmt.where = parse_expression();
@@ -228,6 +245,57 @@ namespace sql
             values.push_back(expect_identifier("Expected identifier after ','"));
         }
         return values;
+    }
+
+    std::vector<SelectSource> Parser::parse_select_source_list()
+    {
+        std::vector<SelectSource> values;
+        values.push_back(parse_select_source());
+        while (consume_optional(TokenType::Comma))
+        {
+            values.push_back(parse_select_source());
+        }
+        return values;
+    }
+
+    SelectSource Parser::parse_select_source()
+    {
+        SelectSource source;
+        if (consume_optional(TokenType::LParen))
+        {
+            expect_keyword("SELECT");
+            source.kind = SelectSource::Kind::Subquery;
+            source.subquery = std::make_shared<SelectStatement>(parse_select_statement());
+            expect(TokenType::RParen, "Expected ')' after SELECT source");
+
+            if (match_keyword("AS"))
+            {
+                source.alias = expect_identifier("Expected alias after AS");
+            }
+            else if (check(TokenType::Identifier) && !is_select_source_terminator(peek()))
+            {
+                source.alias = advance().text;
+            }
+
+            if (!source.alias.has_value())
+            {
+                fail("SELECT subquery sources require an alias");
+            }
+
+            return source;
+        }
+
+        source.kind = SelectSource::Kind::Table;
+        source.name = expect_identifier("Expected table name");
+        if (match_keyword("AS"))
+        {
+            source.alias = expect_identifier("Expected alias after AS");
+        }
+        else if (check(TokenType::Identifier) && !is_select_source_terminator(peek()))
+        {
+            source.alias = advance().text;
+        }
+        return source;
     }
 
     std::vector<ColumnDefinition> Parser::parse_column_definition_list()
@@ -513,7 +581,7 @@ namespace sql
 
         if (check(TokenType::Identifier))
         {
-            const std::string text = advance().text;
+            const std::string text = parse_identifier_reference("Expected identifier");
             if (consume_optional(TokenType::LParen))
             {
                 std::vector<ExpressionPtr> arguments;
@@ -624,6 +692,16 @@ namespace sql
         }
 
         return advance().text;
+    }
+
+    std::string Parser::parse_identifier_reference(const std::string& message)
+    {
+        std::string identifier = expect_identifier(message);
+        while (consume_optional(TokenType::Dot))
+        {
+            identifier += "." + expect_identifier("Expected identifier after '.'");
+        }
+        return identifier;
     }
 
     void Parser::expect_keyword(const std::string& keyword)

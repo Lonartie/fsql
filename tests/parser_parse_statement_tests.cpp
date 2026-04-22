@@ -40,7 +40,9 @@ TEST_CASE("parses select star with where clause")
 
     CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
     CHECK(statement.select.select_all);
-    CHECK_EQ(statement.select.table_name, "todos");
+    REQUIRE_EQ(statement.select.sources.size(), 1U);
+    CHECK_EQ(static_cast<int>(statement.select.sources[0].kind), static_cast<int>(sql::SelectSource::Kind::Table));
+    CHECK_EQ(statement.select.sources[0].name, "todos");
     REQUIRE(statement.select.where != nullptr);
     CHECK_EQ(static_cast<int>(statement.select.where->kind), static_cast<int>(sql::ExpressionKind::Binary));
     CHECK_EQ(static_cast<int>(statement.select.where->binary_operator), static_cast<int>(sql::BinaryOperator::Equal));
@@ -134,6 +136,38 @@ TEST_CASE("parses group by and having clauses")
     CHECK(statement.select.order_by[0].descending);
 }
 
+TEST_CASE("parses multiple select sources and qualified identifiers")
+{
+    const auto statement = sql_test::parse_statement("SELECT tasks.title, teams.name FROM tasks, teams WHERE tasks.team_id = teams.id;");
+
+    CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
+    REQUIRE_EQ(statement.select.sources.size(), 2U);
+    CHECK_EQ(statement.select.sources[0].name, "tasks");
+    CHECK_EQ(statement.select.sources[1].name, "teams");
+    REQUIRE_EQ(statement.select.projections.size(), 2U);
+    CHECK_EQ(statement.select.projections[0]->text, "tasks.title");
+    CHECK_EQ(statement.select.projections[1]->text, "teams.name");
+    REQUIRE(statement.select.where != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.where->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(statement.select.where->binary_operator), static_cast<int>(sql::BinaryOperator::Equal));
+}
+
+TEST_CASE("parses select source subqueries with aliases")
+{
+    const auto statement = sql_test::parse_statement("SELECT t.title, defaults.category FROM tasks t, (SELECT category FROM settings) defaults WHERE t.category = defaults.category;");
+
+    REQUIRE_EQ(statement.select.sources.size(), 2U);
+    CHECK_EQ(statement.select.sources[0].name, "tasks");
+    REQUIRE(statement.select.sources[0].alias.has_value());
+    CHECK_EQ(*statement.select.sources[0].alias, "t");
+    CHECK_EQ(static_cast<int>(statement.select.sources[1].kind), static_cast<int>(sql::SelectSource::Kind::Subquery));
+    REQUIRE(statement.select.sources[1].subquery != nullptr);
+    REQUIRE(statement.select.sources[1].alias.has_value());
+    CHECK_EQ(*statement.select.sources[1].alias, "defaults");
+    REQUIRE_EQ(statement.select.sources[1].subquery->sources.size(), 1U);
+    CHECK_EQ(statement.select.sources[1].subquery->sources[0].name, "settings");
+}
+
 TEST_CASE("parses UNIQUE synonym for DISTINCT")
 {
     const auto statement = sql_test::parse_statement("SELECT UNIQUE category FROM todos ORDER BY category;");
@@ -165,7 +199,7 @@ TEST_CASE("rejects unsupported statements")
 
 TEST_CASE("rejects trailing tokens")
 {
-    CHECK_THROWS_AS(sql_test::parse_statement("SELECT title FROM todos extra"), std::runtime_error);
+    CHECK_THROWS_AS(sql_test::parse_statement("SELECT title FROM todos WHERE done = false extra"), std::runtime_error);
 }
 
 TEST_CASE("accepts AUTO_INCREMENT in create table")
@@ -199,7 +233,8 @@ TEST_CASE("parses WHERE clause containing SELECT subquery")
     REQUIRE(statement.select.where->right != nullptr);
     CHECK_EQ(static_cast<int>(statement.select.where->right->kind), static_cast<int>(sql::ExpressionKind::Select));
     REQUIRE(statement.select.where->right->select != nullptr);
-    CHECK_EQ(statement.select.where->right->select->table_name, "defaults");
+    REQUIRE_EQ(statement.select.where->right->select->sources.size(), 1U);
+    CHECK_EQ(statement.select.where->right->select->sources[0].name, "defaults");
 }
 
 TEST_CASE("parses column default expressions")

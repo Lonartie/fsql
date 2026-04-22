@@ -232,5 +232,38 @@ TEST_CASE("summarizes changing workloads with grouping having ordering and pagin
     CHECK(text.find("1 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("combines multiple select sources and derived tables in a reporting workflow")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE services (id, name, team_id, active);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name, region);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE incidents (service_id, severity, open);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO services VALUES (1, 'billing', 10, true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO services VALUES (2, 'search', 10, true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO services VALUES (3, 'docs', 20, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops', 'eu');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (20, 'docs', 'us');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES (1, 9, true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES (1, 5, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES (2, 7, true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES (3, 3, true);"));
+
+    context.reset_output();
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT svc.name, teams.name, incident_rows.open "
+        "FROM services svc, teams, "
+        "(SELECT service_id, open FROM incidents WHERE open = true) incident_rows "
+        "WHERE svc.team_id = teams.id AND svc.id = incident_rows.service_id AND svc.active = true "
+        "ORDER BY svc.name ASC;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("billing") != std::string::npos);
+    CHECK(text.find("search") != std::string::npos);
+    CHECK(text.find("ops") != std::string::npos);
+    CHECK(text.find("docs") == std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
 TEST_SUITE_END();
 
