@@ -307,5 +307,49 @@ TEST_CASE("uses EXISTS and IN predicate subqueries in a larger triage workflow")
     CHECK(text.find("3 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("uses ANY and ALL quantified subqueries in a larger escalation workflow")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (id, title, severity, team_id, status);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE thresholds (level);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE on_call (team_id);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (1, 'Patch release', 9, 10, 'open');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (2, 'Write docs', 3, 20, 'open');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (3, 'Rotate keys', 8, 30, 'open');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (4, 'Renew cert', 5, 10, 'open');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO thresholds VALUES (4);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO thresholds VALUES (6);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO on_call VALUES (10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO on_call VALUES (30);"));
+
+    context.executor.execute(sql_test::parse_statement(
+        "UPDATE tasks SET status = 'priority' "
+        "WHERE severity > ALL (SELECT level FROM thresholds) "
+        "AND team_id = ANY (SELECT team_id FROM on_call);"));
+
+    const auto updated = context.storage->load_table("tasks");
+    REQUIRE_EQ(updated.rows.size(), 4U);
+    CHECK_EQ(updated.rows[0][4], "priority");
+    CHECK_EQ(updated.rows[1][4], "open");
+    CHECK_EQ(updated.rows[2][4], "priority");
+    CHECK_EQ(updated.rows[3][4], "open");
+
+    context.reset_output();
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title, status FROM tasks "
+        "WHERE severity >= ANY (SELECT level FROM thresholds) "
+        "AND severity <= ALL (SELECT level + 2 FROM thresholds WHERE level >= 6) "
+        "AND team_id = ANY (SELECT team_id FROM on_call) "
+        "ORDER BY title;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Rotate keys") != std::string::npos);
+    CHECK(text.find("Renew cert") != std::string::npos);
+    CHECK(text.find("Write docs") == std::string::npos);
+    CHECK(text.find("Patch release") == std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
 TEST_SUITE_END();
 

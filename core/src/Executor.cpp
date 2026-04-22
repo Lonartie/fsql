@@ -276,6 +276,27 @@ namespace sql
             fail("Unsupported binary operator");
         }
 
+        bool evaluate_quantified_comparison(int comparison, BinaryOperator op)
+        {
+            switch (op)
+            {
+            case BinaryOperator::Less:
+                return comparison < 0;
+            case BinaryOperator::LessEqual:
+                return comparison <= 0;
+            case BinaryOperator::Greater:
+                return comparison > 0;
+            case BinaryOperator::GreaterEqual:
+                return comparison >= 0;
+            case BinaryOperator::Equal:
+                return comparison == 0;
+            case BinaryOperator::NotEqual:
+                return comparison != 0;
+            default:
+                fail("ANY and ALL require comparison operators");
+            }
+        }
+
         std::string serialize_expression(const ExpressionPtr& expression);
 
         std::string serialize_select_statement(const SelectStatement& statement);
@@ -287,6 +308,12 @@ namespace sql
         bool evaluate_exists_expression(const SelectStatement& stmt, const IStorage& storage);
 
         EvaluatedValue evaluate_in_subquery(const EvaluatedValue& left, const ExpressionPtr& right, const IStorage& storage);
+
+        EvaluatedValue evaluate_quantified_subquery(const EvaluatedValue& left,
+                                                    BinaryOperator op,
+                                                    SubqueryQuantifier quantifier,
+                                                    const ExpressionPtr& right,
+                                                    const IStorage& storage);
 
         SelectResult run_select_statement(const SelectStatement& stmt, const IStorage& storage);
 
@@ -490,6 +517,17 @@ namespace sql
                 case BinaryOperator::BitwiseOr: op = "|"; break;
                 case BinaryOperator::LogicalAnd: op = "&&"; break;
                 case BinaryOperator::LogicalOr: op = "||"; break;
+                }
+
+                if (expression->subquery_quantifier != SubqueryQuantifier::None)
+                {
+                    if (!expression->right || expression->right->kind != ExpressionKind::Select)
+                    {
+                        fail("Quantified comparisons require a SELECT subquery");
+                    }
+
+                    const auto quantifier = expression->subquery_quantifier == SubqueryQuantifier::Any ? "ANY" : "ALL";
+                    return "(" + serialize_expression(expression->left) + " " + op + " " + quantifier + " " + serialize_expression(expression->right) + ")";
                 }
                 return "(" + serialize_expression(expression->left) + " " + op + " " + serialize_expression(expression->right) + ")";
             }
@@ -1026,6 +1064,14 @@ namespace sql
             case ExpressionKind::Unary:
                 return apply_unary_operator(expression->unary_operator, evaluate_select_row_expression(expression->left, table, row, storage));
             case ExpressionKind::Binary:
+                if (expression->subquery_quantifier != SubqueryQuantifier::None)
+                {
+                    return evaluate_quantified_subquery(evaluate_select_row_expression(expression->left, table, row, storage),
+                                                        expression->binary_operator,
+                                                        expression->subquery_quantifier,
+                                                        expression->right,
+                                                        storage);
+                }
                 if (expression->binary_operator == BinaryOperator::In)
                 {
                     return evaluate_in_subquery(evaluate_select_row_expression(expression->left, table, row, storage), expression->right, storage);
@@ -1203,6 +1249,14 @@ namespace sql
             case ExpressionKind::Unary:
                 return apply_unary_operator(expression->unary_operator, evaluate_grouped_expression(expression->left, table, representative_row, rows, storage));
             case ExpressionKind::Binary:
+                if (expression->subquery_quantifier != SubqueryQuantifier::None)
+                {
+                    return evaluate_quantified_subquery(evaluate_grouped_expression(expression->left, table, representative_row, rows, storage),
+                                                        expression->binary_operator,
+                                                        expression->subquery_quantifier,
+                                                        expression->right,
+                                                        storage);
+                }
                 if (expression->binary_operator == BinaryOperator::In)
                 {
                     return evaluate_in_subquery(evaluate_grouped_expression(expression->left, table, representative_row, rows, storage), expression->right, storage);
@@ -1460,6 +1514,58 @@ namespace sql
             return make_numeric(0.0);
         }
 
+        EvaluatedValue evaluate_quantified_subquery(const EvaluatedValue& left,
+                                                    BinaryOperator op,
+                                                    SubqueryQuantifier quantifier,
+                                                    const ExpressionPtr& right,
+                                                    const IStorage& storage)
+        {
+            if (quantifier == SubqueryQuantifier::None)
+            {
+                fail("Missing ANY/ALL quantifier");
+            }
+            if (!right || right->kind != ExpressionKind::Select || !right->select)
+            {
+                fail("ANY and ALL currently require a SELECT subquery");
+            }
+
+            const auto result = run_select_statement(*right->select, storage);
+            if (result.column_names.size() != 1)
+            {
+                fail("ANY/ALL subquery must return exactly one column");
+            }
+
+            if (quantifier == SubqueryQuantifier::Any)
+            {
+                for (const auto& row : result.rows)
+                {
+                    if (row.empty())
+                    {
+                        continue;
+                    }
+                    if (evaluate_quantified_comparison(compare_values(left, make_text(row[0])), op))
+                    {
+                        return make_numeric(1.0);
+                    }
+                }
+                return make_numeric(0.0);
+            }
+
+            for (const auto& row : result.rows)
+            {
+                if (row.empty())
+                {
+                    continue;
+                }
+                if (!evaluate_quantified_comparison(compare_values(left, make_text(row[0])), op))
+                {
+                    return make_numeric(0.0);
+                }
+            }
+
+            return make_numeric(1.0);
+        }
+
         EvaluatedValue evaluate_expression(const ExpressionPtr& expression, const Table& table, const Row& row, const IStorage& storage)
         {
             if (!expression)
@@ -1500,6 +1606,14 @@ namespace sql
             case ExpressionKind::Unary:
                 return apply_unary_operator(expression->unary_operator, evaluate_expression(expression->left, table, row, storage));
             case ExpressionKind::Binary:
+                if (expression->subquery_quantifier != SubqueryQuantifier::None)
+                {
+                    return evaluate_quantified_subquery(evaluate_expression(expression->left, table, row, storage),
+                                                        expression->binary_operator,
+                                                        expression->subquery_quantifier,
+                                                        expression->right,
+                                                        storage);
+                }
                 if (expression->binary_operator == BinaryOperator::In)
                 {
                     return evaluate_in_subquery(evaluate_expression(expression->left, table, row, storage), expression->right, storage);

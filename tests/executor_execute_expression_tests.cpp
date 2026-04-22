@@ -227,6 +227,62 @@ TEST_CASE("rejects IN subqueries returning multiple columns")
     CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks WHERE team_id IN (SELECT id, name FROM teams);")), std::runtime_error);
 }
 
+TEST_CASE("supports ANY and ALL quantified subquery predicates")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, severity, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE thresholds (value);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, on_call);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 9, 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 3, 20);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Rotate keys', 8, 30);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO thresholds VALUES (4);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO thresholds VALUES (6);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (30, true);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE severity > ALL (SELECT value FROM thresholds) AND team_id = ANY (SELECT id FROM teams WHERE on_call = true) ORDER BY title;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Rotate keys") != std::string::npos);
+    CHECK(text.find("Write docs") == std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("uses SQL empty set semantics for ANY and ALL")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, severity);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE thresholds (value);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 9);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE severity > ANY (SELECT value FROM thresholds) OR severity > ALL (SELECT value FROM thresholds);"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("rejects ANY and ALL subqueries returning multiple columns")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, severity);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE thresholds (value, label);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 9);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO thresholds VALUES (4, 'warn');"));
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks WHERE severity > ANY (SELECT value, label FROM thresholds);")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks WHERE severity > ALL (SELECT value, label FROM thresholds);")), std::runtime_error);
+}
+
 TEST_CASE("supports SELECT subqueries in INSERT values")
 {
     sql_test::ExecutorContext context;

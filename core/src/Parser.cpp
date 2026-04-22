@@ -426,11 +426,59 @@ namespace sql
         {
             if (consume_optional(TokenType::DoubleEqual) || consume_optional(TokenType::Equal))
             {
-                expression = make_binary(BinaryOperator::Equal, expression, parse_relational());
+                std::optional<SubqueryQuantifier> quantifier;
+                if (match_keyword("ANY"))
+                {
+                    quantifier = SubqueryQuantifier::Any;
+                }
+                else if (match_keyword("ALL"))
+                {
+                    quantifier = SubqueryQuantifier::All;
+                }
+
+                if (quantifier.has_value())
+                {
+                    expect(TokenType::LParen, "Expected '(' after ANY/ALL");
+                    if (!match_keyword("SELECT"))
+                    {
+                        fail("ANY and ALL currently require a SELECT subquery");
+                    }
+                    auto statement = parse_select_statement();
+                    expect(TokenType::RParen, "Expected ')' after ANY/ALL subquery");
+                    expression = make_quantified_binary(BinaryOperator::Equal, expression, std::move(statement), *quantifier);
+                }
+                else
+                {
+                    expression = make_binary(BinaryOperator::Equal, expression, parse_relational());
+                }
             }
             else if (consume_optional(TokenType::NotEqual))
             {
-                expression = make_binary(BinaryOperator::NotEqual, expression, parse_relational());
+                std::optional<SubqueryQuantifier> quantifier;
+                if (match_keyword("ANY"))
+                {
+                    quantifier = SubqueryQuantifier::Any;
+                }
+                else if (match_keyword("ALL"))
+                {
+                    quantifier = SubqueryQuantifier::All;
+                }
+
+                if (quantifier.has_value())
+                {
+                    expect(TokenType::LParen, "Expected '(' after ANY/ALL");
+                    if (!match_keyword("SELECT"))
+                    {
+                        fail("ANY and ALL currently require a SELECT subquery");
+                    }
+                    auto statement = parse_select_statement();
+                    expect(TokenType::RParen, "Expected ')' after ANY/ALL subquery");
+                    expression = make_quantified_binary(BinaryOperator::NotEqual, expression, std::move(statement), *quantifier);
+                }
+                else
+                {
+                    expression = make_binary(BinaryOperator::NotEqual, expression, parse_relational());
+                }
             }
             else
             {
@@ -447,19 +495,115 @@ namespace sql
         {
             if (consume_optional(TokenType::Less))
             {
-                expression = make_binary(BinaryOperator::Less, expression, parse_additive());
+                std::optional<SubqueryQuantifier> quantifier;
+                if (match_keyword("ANY"))
+                {
+                    quantifier = SubqueryQuantifier::Any;
+                }
+                else if (match_keyword("ALL"))
+                {
+                    quantifier = SubqueryQuantifier::All;
+                }
+
+                if (quantifier.has_value())
+                {
+                    expect(TokenType::LParen, "Expected '(' after ANY/ALL");
+                    if (!match_keyword("SELECT"))
+                    {
+                        fail("ANY and ALL currently require a SELECT subquery");
+                    }
+                    auto statement = parse_select_statement();
+                    expect(TokenType::RParen, "Expected ')' after ANY/ALL subquery");
+                    expression = make_quantified_binary(BinaryOperator::Less, expression, std::move(statement), *quantifier);
+                }
+                else
+                {
+                    expression = make_binary(BinaryOperator::Less, expression, parse_additive());
+                }
             }
             else if (consume_optional(TokenType::LessEqual))
             {
-                expression = make_binary(BinaryOperator::LessEqual, expression, parse_additive());
+                std::optional<SubqueryQuantifier> quantifier;
+                if (match_keyword("ANY"))
+                {
+                    quantifier = SubqueryQuantifier::Any;
+                }
+                else if (match_keyword("ALL"))
+                {
+                    quantifier = SubqueryQuantifier::All;
+                }
+
+                if (quantifier.has_value())
+                {
+                    expect(TokenType::LParen, "Expected '(' after ANY/ALL");
+                    if (!match_keyword("SELECT"))
+                    {
+                        fail("ANY and ALL currently require a SELECT subquery");
+                    }
+                    auto statement = parse_select_statement();
+                    expect(TokenType::RParen, "Expected ')' after ANY/ALL subquery");
+                    expression = make_quantified_binary(BinaryOperator::LessEqual, expression, std::move(statement), *quantifier);
+                }
+                else
+                {
+                    expression = make_binary(BinaryOperator::LessEqual, expression, parse_additive());
+                }
             }
             else if (consume_optional(TokenType::Greater))
             {
-                expression = make_binary(BinaryOperator::Greater, expression, parse_additive());
+                std::optional<SubqueryQuantifier> quantifier;
+                if (match_keyword("ANY"))
+                {
+                    quantifier = SubqueryQuantifier::Any;
+                }
+                else if (match_keyword("ALL"))
+                {
+                    quantifier = SubqueryQuantifier::All;
+                }
+
+                if (quantifier.has_value())
+                {
+                    expect(TokenType::LParen, "Expected '(' after ANY/ALL");
+                    if (!match_keyword("SELECT"))
+                    {
+                        fail("ANY and ALL currently require a SELECT subquery");
+                    }
+                    auto statement = parse_select_statement();
+                    expect(TokenType::RParen, "Expected ')' after ANY/ALL subquery");
+                    expression = make_quantified_binary(BinaryOperator::Greater, expression, std::move(statement), *quantifier);
+                }
+                else
+                {
+                    expression = make_binary(BinaryOperator::Greater, expression, parse_additive());
+                }
             }
             else if (consume_optional(TokenType::GreaterEqual))
             {
-                expression = make_binary(BinaryOperator::GreaterEqual, expression, parse_additive());
+                std::optional<SubqueryQuantifier> quantifier;
+                if (match_keyword("ANY"))
+                {
+                    quantifier = SubqueryQuantifier::Any;
+                }
+                else if (match_keyword("ALL"))
+                {
+                    quantifier = SubqueryQuantifier::All;
+                }
+
+                if (quantifier.has_value())
+                {
+                    expect(TokenType::LParen, "Expected '(' after ANY/ALL");
+                    if (!match_keyword("SELECT"))
+                    {
+                        fail("ANY and ALL currently require a SELECT subquery");
+                    }
+                    auto statement = parse_select_statement();
+                    expect(TokenType::RParen, "Expected ')' after ANY/ALL subquery");
+                    expression = make_quantified_binary(BinaryOperator::GreaterEqual, expression, std::move(statement), *quantifier);
+                }
+                else
+                {
+                    expression = make_binary(BinaryOperator::GreaterEqual, expression, parse_additive());
+                }
             }
             else if (match_keyword("IN"))
             {
@@ -684,6 +828,17 @@ namespace sql
         expression->binary_operator = op;
         expression->left = std::move(left);
         expression->right = std::move(right);
+        return expression;
+    }
+
+    ExpressionPtr Parser::make_quantified_binary(BinaryOperator op, ExpressionPtr left, SelectStatement statement, SubqueryQuantifier quantifier) const
+    {
+        auto expression = std::make_shared<Expression>();
+        expression->kind = ExpressionKind::Binary;
+        expression->binary_operator = op;
+        expression->subquery_quantifier = quantifier;
+        expression->left = std::move(left);
+        expression->right = make_select(std::move(statement));
         return expression;
     }
 

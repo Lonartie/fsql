@@ -115,6 +115,14 @@ namespace sql
         LogicalOr
     };
 
+    /// @brief Quantifier applied to a SELECT subquery predicate.
+    enum class SubqueryQuantifier
+    {
+        None,
+        Any,
+        All
+    };
+
     struct Expression;
     struct SelectStatement;
 
@@ -147,6 +155,9 @@ namespace sql
 
         /// @brief Binary operator when @ref kind is `Binary`.
         BinaryOperator binary_operator = BinaryOperator::Add;
+
+        /// @brief Optional subquery quantifier for quantified comparisons.
+        SubqueryQuantifier subquery_quantifier = SubqueryQuantifier::None;
 
         /// @brief Left operand for unary and binary expressions.
         ExpressionPtr left;

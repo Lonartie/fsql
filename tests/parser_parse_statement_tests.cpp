@@ -207,6 +207,22 @@ TEST_CASE("parses EXISTS and IN subquery predicates inside WHERE clause")
     CHECK_EQ(static_cast<int>(statement.select.where->right->binary_operator), static_cast<int>(sql::BinaryOperator::In));
 }
 
+TEST_CASE("parses ANY and ALL quantified subquery predicates inside WHERE clause")
+{
+    const auto statement = sql_test::parse_statement("SELECT title FROM tasks WHERE severity > ALL (SELECT threshold FROM critical_rules) AND team_id = ANY (SELECT id FROM teams WHERE on_call = true);");
+
+    CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
+    REQUIRE(statement.select.where != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.where->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(statement.select.where->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalAnd));
+    REQUIRE(statement.select.where->left != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.where->left->binary_operator), static_cast<int>(sql::BinaryOperator::Greater));
+    CHECK_EQ(static_cast<int>(statement.select.where->left->subquery_quantifier), static_cast<int>(sql::SubqueryQuantifier::All));
+    REQUIRE(statement.select.where->right != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.where->right->binary_operator), static_cast<int>(sql::BinaryOperator::Equal));
+    CHECK_EQ(static_cast<int>(statement.select.where->right->subquery_quantifier), static_cast<int>(sql::SubqueryQuantifier::Any));
+}
+
 TEST_CASE("rejects unsupported statements")
 {
     CHECK_THROWS_AS(sql_test::parse_statement("MERGE INTO todos;"), std::runtime_error);

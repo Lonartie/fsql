@@ -5,7 +5,6 @@
 - CREATE VIEW / DROP VIEW command
 - JOINs
 - UNION, UNION ALL, INTERSECT, EXCEPT
-- ANY, ALL
 - IS NULL, IS NOT NULL (whole null-semantics)
 - Further align operator semantics with SQL standard beyond the implemented keyword operators
   - Standardize remaining non-SQL operators / aliases and edge-case semantics
@@ -47,3 +46,6 @@
 - Predicate subqueries in expressions:
   - EXISTS (SELECT ...)
   - IN (SELECT ...)
+- Quantified predicate subqueries:
+  - = ANY (SELECT ...)
+  - <, <=, >, >=, != with ANY/ALL

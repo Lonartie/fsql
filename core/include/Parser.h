@@ -163,6 +163,14 @@ namespace sql
         /// @return Expression node.
         ExpressionPtr make_binary(BinaryOperator op, ExpressionPtr left, ExpressionPtr right) const;
 
+        /// @brief Creates a quantified binary expression node such as `= ANY (SELECT ...)`.
+        /// @param op Comparison operator.
+        /// @param left Left operand.
+        /// @param statement Nested select statement.
+        /// @param quantifier Subquery quantifier.
+        /// @return Expression node.
+        ExpressionPtr make_quantified_binary(BinaryOperator op, ExpressionPtr left, SelectStatement statement, SubqueryQuantifier quantifier) const;
+
         /// @brief Parses a non-negative integer literal.
         /// @param message Error message for invalid values.
         /// @return Parsed integer value.
