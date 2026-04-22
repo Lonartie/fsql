@@ -138,13 +138,13 @@ namespace sql
             }
             else
             {
-                for (std::size_t i = 0; i < statement.columns.size(); ++i)
+                for (std::size_t i = 0; i < statement.projections.size(); ++i)
                 {
                     if (i > 0)
                     {
                         stream << ", ";
                     }
-                    stream << statement.columns[i];
+                    stream << serialize_expression(statement.projections[i]);
                 }
             }
 
@@ -183,7 +183,27 @@ namespace sql
                 }
                 return "(" + serialize_select_statement(*expression->select) + ")";
             case ExpressionKind::FunctionCall:
-                return expression->text + "()";
+            {
+                std::ostringstream stream;
+                stream << expression->text << '(';
+                if (expression->function_uses_star)
+                {
+                    stream << '*';
+                }
+                else
+                {
+                    for (std::size_t i = 0; i < expression->arguments.size(); ++i)
+                    {
+                        if (i > 0)
+                        {
+                            stream << ", ";
+                        }
+                        stream << serialize_expression(expression->arguments[i]);
+                    }
+                }
+                stream << ')';
+                return stream.str();
+            }
             case ExpressionKind::Unary:
             {
                 std::string op;
@@ -225,10 +245,19 @@ namespace sql
             fail("Unsupported expression serialization");
         }
 
-        EvaluatedValue evaluate_function(const std::string& name)
+        bool is_aggregate_function_name(const std::string& name)
         {
-            if (iequals(name, "NOW"))
+            return iequals(name, "COUNT") || iequals(name, "SUM") || iequals(name, "AVG") || iequals(name, "MIN") || iequals(name, "MAX");
+        }
+
+        EvaluatedValue evaluate_function(const Expression& expression)
+        {
+            if (iequals(expression.text, "NOW"))
             {
+                if (expression.function_uses_star || !expression.arguments.empty())
+                {
+                    fail("Unsupported function: NOW(...)");
+                }
                 const auto now = std::chrono::system_clock::now();
                 const std::time_t time = std::chrono::system_clock::to_time_t(now);
                 std::tm local_time{};
@@ -242,7 +271,12 @@ namespace sql
                 return make_text(stream.str());
             }
 
-            fail("Unsupported function: " + name + "()");
+            if (is_aggregate_function_name(expression.text))
+            {
+                fail("Aggregate function '" + expression.text + "' can only be used in SELECT projections");
+            }
+
+            fail("Unsupported function: " + expression.text + "()");
         }
 
         ParsedColumnMetadata parse_column_metadata(const std::string& stored_name)
@@ -328,44 +362,251 @@ namespace sql
             output << '\n';
         }
 
-        SelectResult run_select_statement(const SelectStatement& stmt, const IStorage& storage)
+        bool contains_aggregate_function(const ExpressionPtr& expression)
         {
-            const Table table = storage.load_table(stmt.table_name);
-            std::vector<std::size_t> selected_indexes;
-            std::vector<std::string> selected_names;
-
-            if (stmt.select_all)
+            if (!expression)
             {
-                for (std::size_t i = 0; i < table.columns.size(); ++i)
-                {
-                    selected_indexes.push_back(i);
-                    selected_names.push_back(visible_column_name(table.columns[i]));
-                }
-            }
-            else
-            {
-                for (const auto& column : stmt.columns)
-                {
-                    const auto index = storage.column_index(table, column);
-                    selected_indexes.push_back(index);
-                    selected_names.push_back(visible_column_name(table.columns[index]));
-                }
+                return false;
             }
 
-            SelectResult result;
-            result.column_names = std::move(selected_names);
+            switch (expression->kind)
+            {
+            case ExpressionKind::FunctionCall:
+                if (is_aggregate_function_name(expression->text))
+                {
+                    return true;
+                }
+                for (const auto& argument : expression->arguments)
+                {
+                    if (contains_aggregate_function(argument))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            case ExpressionKind::Unary:
+                return contains_aggregate_function(expression->left);
+            case ExpressionKind::Binary:
+                return contains_aggregate_function(expression->left) || contains_aggregate_function(expression->right);
+            case ExpressionKind::Select:
+            case ExpressionKind::Literal:
+            case ExpressionKind::Identifier:
+                return false;
+            }
+
+            return false;
+        }
+
+        void validate_select_projection(const ExpressionPtr& expression, const Table& table, const IStorage& storage)
+        {
+            if (!expression)
+            {
+                return;
+            }
+
+            switch (expression->kind)
+            {
+            case ExpressionKind::Identifier:
+                static_cast<void>(storage.column_index(table, expression->text));
+                return;
+            case ExpressionKind::FunctionCall:
+                for (const auto& argument : expression->arguments)
+                {
+                    validate_select_projection(argument, table, storage);
+                }
+                return;
+            case ExpressionKind::Unary:
+                validate_select_projection(expression->left, table, storage);
+                return;
+            case ExpressionKind::Binary:
+                validate_select_projection(expression->left, table, storage);
+                validate_select_projection(expression->right, table, storage);
+                return;
+            case ExpressionKind::Select:
+            case ExpressionKind::Literal:
+                return;
+            }
+        }
+
+        std::vector<const Row*> filter_rows(const Table& table, const ExpressionPtr& where, const IStorage& storage)
+        {
+            std::vector<const Row*> rows;
+            rows.reserve(table.rows.size());
             for (const auto& row : table.rows)
             {
-                if (stmt.where && !to_bool(evaluate_expression(stmt.where, table, row, storage)))
+                if (where && !to_bool(evaluate_expression(where, table, row, storage)))
+                {
+                    continue;
+                }
+                rows.push_back(&row);
+            }
+            return rows;
+        }
+
+        double require_numeric_argument(const EvaluatedValue& value, const std::string& function_name)
+        {
+            if (value.numeric)
+            {
+                return value.number;
+            }
+
+            double parsed = 0.0;
+            if (try_parse_number(value.text, parsed))
+            {
+                return parsed;
+            }
+
+            fail("Aggregate function " + function_name + " requires numeric values");
+        }
+
+        EvaluatedValue evaluate_aggregate_function(const ExpressionPtr& expression, const Table& table, const std::vector<const Row*>& rows, const IStorage& storage)
+        {
+            if (!expression || expression->kind != ExpressionKind::FunctionCall || !is_aggregate_function_name(expression->text))
+            {
+                fail("Invalid aggregate projection");
+            }
+
+            if (iequals(expression->text, "COUNT"))
+            {
+                if (expression->function_uses_star)
+                {
+                    if (!expression->arguments.empty())
+                    {
+                        fail("COUNT(*) does not accept additional arguments");
+                    }
+                    return make_numeric(static_cast<double>(rows.size()));
+                }
+
+                if (expression->arguments.size() != 1)
+                {
+                    fail("COUNT requires exactly one argument or *");
+                }
+
+                std::size_t count = 0;
+                for (const auto* row : rows)
+                {
+                    const auto value = evaluate_expression(expression->arguments[0], table, *row, storage);
+                    if (!value.text.empty())
+                    {
+                        ++count;
+                    }
+                }
+                return make_numeric(static_cast<double>(count));
+            }
+
+            if (expression->function_uses_star)
+            {
+                fail("Only COUNT supports '*' as an argument");
+            }
+            if (expression->arguments.size() != 1)
+            {
+                fail("Aggregate function " + expression->text + " requires exactly one argument");
+            }
+
+            if (iequals(expression->text, "SUM") || iequals(expression->text, "AVG"))
+            {
+                double total = 0.0;
+                std::size_t count = 0;
+                for (const auto* row : rows)
+                {
+                    const auto value = evaluate_expression(expression->arguments[0], table, *row, storage);
+                    if (value.text.empty())
+                    {
+                        continue;
+                    }
+                    total += require_numeric_argument(value, expression->text);
+                    ++count;
+                }
+
+                if (iequals(expression->text, "SUM"))
+                {
+                    return make_numeric(total);
+                }
+                return make_numeric(count == 0 ? 0.0 : (total / static_cast<double>(count)));
+            }
+
+            EvaluatedValue best;
+            bool has_best = false;
+            for (const auto* row : rows)
+            {
+                const auto value = evaluate_expression(expression->arguments[0], table, *row, storage);
+                if (value.text.empty())
                 {
                     continue;
                 }
 
-                Row projected_row;
-                projected_row.reserve(selected_indexes.size());
-                for (const auto index : selected_indexes)
+                if (!has_best)
                 {
-                    projected_row.push_back(row[index]);
+                    best = value;
+                    has_best = true;
+                    continue;
+                }
+
+                const bool prefer_numeric = value.numeric && best.numeric;
+                const bool should_replace = iequals(expression->text, "MIN")
+                    ? (prefer_numeric ? value.number < best.number : value.text < best.text)
+                    : (prefer_numeric ? value.number > best.number : value.text > best.text);
+                if (should_replace)
+                {
+                    best = value;
+                }
+            }
+
+            return has_best ? make_text(best.text) : make_text("");
+        }
+
+        SelectResult run_select_statement(const SelectStatement& stmt, const IStorage& storage)
+        {
+            const Table table = storage.load_table(stmt.table_name);
+            const auto rows = filter_rows(table, stmt.where, storage);
+
+            if (stmt.select_all)
+            {
+                SelectResult result;
+                for (std::size_t i = 0; i < table.columns.size(); ++i)
+                {
+                    result.column_names.push_back(visible_column_name(table.columns[i]));
+                }
+
+                for (const auto* row : rows)
+                {
+                    result.rows.push_back(*row);
+                }
+                return result;
+            }
+
+            SelectResult result;
+            bool has_aggregate_projection = false;
+            for (const auto& projection : stmt.projections)
+            {
+                validate_select_projection(projection, table, storage);
+                has_aggregate_projection = has_aggregate_projection || contains_aggregate_function(projection);
+                result.column_names.push_back(serialize_expression(projection));
+            }
+
+            if (has_aggregate_projection)
+            {
+                Row aggregate_row;
+                aggregate_row.reserve(stmt.projections.size());
+                for (const auto& projection : stmt.projections)
+                {
+                    if (!projection || projection->kind != ExpressionKind::FunctionCall || !is_aggregate_function_name(projection->text))
+                    {
+                        fail("Aggregate queries only support aggregate functions in SELECT projections");
+                    }
+                    aggregate_row.push_back(evaluate_aggregate_function(projection, table, rows, storage).text);
+                }
+                result.rows.push_back(std::move(aggregate_row));
+                return result;
+            }
+
+            for (const auto* row : rows)
+            {
+                Row projected_row;
+                projected_row.reserve(stmt.projections.size());
+                for (const auto& projection : stmt.projections)
+                {
+                    projected_row.push_back(evaluate_expression(projection, table, *row, storage).text);
                 }
                 result.rows.push_back(std::move(projected_row));
             }
@@ -421,7 +662,7 @@ namespace sql
                 }
                 return evaluate_select_expression(*expression->select, storage);
             case ExpressionKind::FunctionCall:
-                return evaluate_function(expression->text);
+                return evaluate_function(*expression);
             case ExpressionKind::Unary:
             {
                 const auto operand = evaluate_expression(expression->left, table, row, storage);

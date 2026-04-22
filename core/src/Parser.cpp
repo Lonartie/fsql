@@ -143,7 +143,7 @@ namespace sql
         }
         else
         {
-            stmt.columns = parse_identifier_list();
+            stmt.projections = parse_expression_list();
         }
 
         expect_keyword("FROM");
@@ -224,6 +224,11 @@ namespace sql
     }
 
     std::vector<ExpressionPtr> Parser::parse_value_list()
+    {
+        return parse_expression_list();
+    }
+
+    std::vector<ExpressionPtr> Parser::parse_expression_list()
     {
         std::vector<ExpressionPtr> values;
         values.push_back(parse_expression());
@@ -432,8 +437,18 @@ namespace sql
             const std::string text = advance().text;
             if (consume_optional(TokenType::LParen))
             {
+                std::vector<ExpressionPtr> arguments;
+                bool uses_star = false;
+                if (consume_optional(TokenType::Star))
+                {
+                    uses_star = true;
+                }
+                else if (!check(TokenType::RParen))
+                {
+                    arguments = parse_expression_list();
+                }
                 expect(TokenType::RParen, "Expected ')' after function call");
-                return make_function(text);
+                return make_function(text, std::move(arguments), uses_star);
             }
             return make_identifier(text);
         }
@@ -457,11 +472,13 @@ namespace sql
         return expression;
     }
 
-    ExpressionPtr Parser::make_function(std::string text) const
+    ExpressionPtr Parser::make_function(std::string text, std::vector<ExpressionPtr> arguments, bool uses_star) const
     {
         auto expression = std::make_shared<Expression>();
         expression->kind = ExpressionKind::FunctionCall;
         expression->text = std::move(text);
+        expression->arguments = std::move(arguments);
+        expression->function_uses_star = uses_star;
         return expression;
     }
 

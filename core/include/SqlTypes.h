@@ -131,6 +131,12 @@ namespace sql
         /// @brief Nested select statement when @ref kind is `Select`.
         SelectStatementPtr select;
 
+        /// @brief Function arguments when @ref kind is `FunctionCall`.
+        std::vector<ExpressionPtr> arguments;
+
+        /// @brief Indicates whether a function call used `*` as its argument list.
+        bool function_uses_star = false;
+
         /// @brief Unary operator when @ref kind is `Unary`.
         UnaryOperator unary_operator = UnaryOperator::Plus;
 
@@ -206,8 +212,8 @@ namespace sql
         /// @brief Indicates whether `*` was used.
         bool select_all = false;
 
-        /// @brief Explicitly selected columns.
-        std::vector<std::string> columns;
+        /// @brief Explicitly selected projections.
+        std::vector<ExpressionPtr> projections;
 
         /// @brief Optional filter expression.
         ExpressionPtr where;

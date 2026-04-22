@@ -63,6 +63,10 @@ namespace sql
         /// @return Parsed values.
         std::vector<ExpressionPtr> parse_value_list();
 
+        /// @brief Parses a comma-separated expression list.
+        /// @return Parsed expressions.
+        std::vector<ExpressionPtr> parse_expression_list();
+
         /// @brief Parses logical OR expressions.
         /// @return Parsed expression tree.
         ExpressionPtr parse_logical_or();
@@ -119,8 +123,10 @@ namespace sql
 
         /// @brief Creates a function call expression node.
         /// @param text Function name.
+        /// @param arguments Function arguments.
+        /// @param uses_star Indicates whether the function call used `*`.
         /// @return Expression node.
-        ExpressionPtr make_function(std::string text) const;
+        ExpressionPtr make_function(std::string text, std::vector<ExpressionPtr> arguments = {}, bool uses_star = false) const;
 
         /// @brief Creates a select expression node.
         /// @param statement Nested select statement.
