@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iomanip>
+#include <regex>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -128,6 +129,57 @@ namespace sql
             }
             quoted += '\'';
             return quoted;
+        }
+
+        bool like_matches_at(const std::string& value, const std::string& pattern, std::size_t value_index, std::size_t pattern_index)
+        {
+            while (pattern_index < pattern.size())
+            {
+                if (pattern[pattern_index] == '%')
+                {
+                    ++pattern_index;
+                    if (pattern_index == pattern.size())
+                    {
+                        return true;
+                    }
+
+                    for (std::size_t i = value_index; i <= value.size(); ++i)
+                    {
+                        if (like_matches_at(value, pattern, i, pattern_index))
+                        {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                if (value_index >= value.size())
+                {
+                    return false;
+                }
+
+                if (pattern[pattern_index] == '_')
+                {
+                    ++value_index;
+                    ++pattern_index;
+                    continue;
+                }
+
+                if (value[value_index] != pattern[pattern_index])
+                {
+                    return false;
+                }
+
+                ++value_index;
+                ++pattern_index;
+            }
+
+            return value_index == value.size();
+        }
+
+        bool like_matches(const std::string& value, const std::string& pattern)
+        {
+            return like_matches_at(value, pattern, 0, 0);
         }
 
         std::string serialize_expression(const ExpressionPtr& expression);
@@ -268,6 +320,8 @@ namespace sql
                 case BinaryOperator::LessEqual: op = "<="; break;
                 case BinaryOperator::Greater: op = ">"; break;
                 case BinaryOperator::GreaterEqual: op = ">="; break;
+                case BinaryOperator::Like: op = "LIKE"; break;
+                case BinaryOperator::Regexp: op = "REGEXP"; break;
                 case BinaryOperator::Equal: op = "="; break;
                 case BinaryOperator::NotEqual: op = "!="; break;
                 case BinaryOperator::BitwiseAnd: op = "&"; break;
@@ -851,6 +905,17 @@ namespace sql
                     return make_numeric(((left.numeric && right.numeric) ? (left.number > right.number) : (left.text > right.text)) ? 1.0 : 0.0);
                 case BinaryOperator::GreaterEqual:
                     return make_numeric(((left.numeric && right.numeric) ? (left.number >= right.number) : (left.text >= right.text)) ? 1.0 : 0.0);
+                case BinaryOperator::Like:
+                    return make_numeric(like_matches(left.text, right.text) ? 1.0 : 0.0);
+                case BinaryOperator::Regexp:
+                    try
+                    {
+                        return make_numeric(std::regex_search(left.text, std::regex(right.text)) ? 1.0 : 0.0);
+                    }
+                    catch (const std::regex_error&)
+                    {
+                        fail("Invalid REGEXP pattern '" + right.text + "'");
+                    }
                 case BinaryOperator::Equal:
                     return make_numeric(((left.numeric && right.numeric) ? (std::fabs(left.number - right.number) < 1e-9) : (left.text == right.text)) ? 1.0 : 0.0);
                 case BinaryOperator::NotEqual:

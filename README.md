@@ -33,6 +33,14 @@ Additional supported behavior includes:
 - column default expressions
 - `AUTO_INCREMENT`
 - arithmetic, logical, comparison, and bitwise expressions
+- SQL keyword boolean operators:
+  - `AND`
+  - `OR`
+  - `NOT`
+- SQL predicate and pattern matching support:
+  - `BETWEEN`
+  - `LIKE`
+  - `REGEXP`
 - scalar `SELECT` sub-expressions
 - aggregate functions such as:
   - `COUNT`
@@ -129,6 +137,7 @@ Examples:
 ./build/sql/sql "INSERT INTO tasks (title) VALUES ('Write README');"
 ./build/sql/sql "INSERT INTO tasks (title, category) VALUES ('Fix parser bug', 'dev');"
 ./build/sql/sql "SELECT title, category, done FROM tasks ORDER BY category, title;"
+./build/sql/sql "SELECT title FROM tasks WHERE NOT done AND title LIKE 'Write%' OR category REGEXP '^de';"
 ```
 
 ## Run the tests

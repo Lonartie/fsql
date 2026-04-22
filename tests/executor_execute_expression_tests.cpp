@@ -67,6 +67,36 @@ TEST_CASE("supports bitwise expressions in WHERE")
     CHECK(text.find("no-bit-2") == std::string::npos);
 }
 
+TEST_CASE("supports SQL keyword predicates and pattern matching in WHERE")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, owner, priority, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 'ops', 7, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 'docs', 4, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Deploy auth', 'ops', 10, true);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE NOT done AND owner LIKE 'op%' AND priority BETWEEN 5 AND 9 OR title REGEXP '^Deploy';"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Deploy auth") != std::string::npos);
+    CHECK(text.find("Write docs") == std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("rejects invalid REGEXP patterns")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release');"));
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks WHERE title REGEXP '[';")), std::runtime_error);
+}
+
 TEST_CASE("supports SELECT subqueries in WHERE expressions")
 {
     sql_test::ExecutorContext context;

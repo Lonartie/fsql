@@ -8,9 +8,9 @@
 - JOINs, GROUP BY, HAVING
 - UNION, UNION ALL, INTERSECT, EXCEPT
 - EXISTS, IN, ANY, ALL
-- BETWEEN, LIKE, REGEXP
 - IS NULL, IS NOT NULL (whole null-semantics)
-- Align operator semantics with SQL standard (e.g. AND instead of && and many more)
+- Further align operator semantics with SQL standard beyond the implemented keyword operators
+  - Standardize remaining non-SQL operators / aliases and edge-case semantics
 - All missing aggregate functions:
   - String functions: 
     - length, substr, trim, replace, instr, lower, upper, concat, etc.
@@ -32,3 +32,10 @@
   - LIMIT
   - OFFSET
   - DISTINCT / UNIQUE
+- SQL keyword logical operators and predicates in expressions:
+  - AND
+  - OR
+  - NOT
+  - BETWEEN
+  - LIKE
+  - REGEXP

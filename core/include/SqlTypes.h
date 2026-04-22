@@ -101,6 +101,8 @@ namespace sql
         LessEqual,
         Greater,
         GreaterEqual,
+        Like,
+        Regexp,
         Equal,
         NotEqual,
         BitwiseAnd,

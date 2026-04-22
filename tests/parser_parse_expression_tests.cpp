@@ -19,5 +19,38 @@ TEST_CASE("parses SELECT subquery as expression")
     CHECK(expression->select->where != nullptr);
 }
 
+TEST_CASE("parses SQL keyword boolean operators")
+{
+    const auto expression = sql_test::parse_expression("NOT active OR score > 5 AND team = 'ops'");
+
+    REQUIRE(expression != nullptr);
+    CHECK_EQ(static_cast<int>(expression->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(expression->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalOr));
+    REQUIRE(expression->left != nullptr);
+    CHECK_EQ(static_cast<int>(expression->left->kind), static_cast<int>(sql::ExpressionKind::Unary));
+    CHECK_EQ(static_cast<int>(expression->left->unary_operator), static_cast<int>(sql::UnaryOperator::LogicalNot));
+    REQUIRE(expression->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->right->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(expression->right->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalAnd));
+}
+
+TEST_CASE("parses BETWEEN LIKE and REGEXP expressions")
+{
+    const auto expression = sql_test::parse_expression("priority BETWEEN 3 AND 7 AND owner LIKE 'op%' OR title REGEXP '^Patch'");
+
+    REQUIRE(expression != nullptr);
+    CHECK_EQ(static_cast<int>(expression->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(expression->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalOr));
+    REQUIRE(expression->left != nullptr);
+    CHECK_EQ(static_cast<int>(expression->left->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(expression->left->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalAnd));
+    REQUIRE(expression->left->left != nullptr);
+    CHECK_EQ(static_cast<int>(expression->left->left->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(expression->left->left->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalAnd));
+    REQUIRE(expression->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->right->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(expression->right->binary_operator), static_cast<int>(sql::BinaryOperator::Regexp));
+}
+
 TEST_SUITE_END();
 

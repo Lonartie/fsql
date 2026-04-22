@@ -293,7 +293,7 @@ namespace sql
     ExpressionPtr Parser::parse_logical_or()
     {
         auto expression = parse_logical_and();
-        while (consume_optional(TokenType::DoublePipe))
+        while (consume_optional(TokenType::DoublePipe) || match_keyword("OR"))
         {
             expression = make_binary(BinaryOperator::LogicalOr, expression, parse_logical_and());
         }
@@ -303,7 +303,7 @@ namespace sql
     ExpressionPtr Parser::parse_logical_and()
     {
         auto expression = parse_bitwise_or();
-        while (consume_optional(TokenType::DoubleAmpersand))
+        while (consume_optional(TokenType::DoubleAmpersand) || match_keyword("AND"))
         {
             expression = make_binary(BinaryOperator::LogicalAnd, expression, parse_bitwise_or());
         }
@@ -382,6 +382,24 @@ namespace sql
             {
                 expression = make_binary(BinaryOperator::GreaterEqual, expression, parse_additive());
             }
+            else if (match_keyword("BETWEEN"))
+            {
+                const auto lower = parse_additive();
+                expect_keyword("AND");
+                const auto upper = parse_additive();
+                expression = make_binary(
+                    BinaryOperator::LogicalAnd,
+                    make_binary(BinaryOperator::GreaterEqual, expression, lower),
+                    make_binary(BinaryOperator::LessEqual, expression, upper));
+            }
+            else if (match_keyword("LIKE"))
+            {
+                expression = make_binary(BinaryOperator::Like, expression, parse_additive());
+            }
+            else if (match_keyword("REGEXP"))
+            {
+                expression = make_binary(BinaryOperator::Regexp, expression, parse_additive());
+            }
             else
             {
                 break;
@@ -447,6 +465,10 @@ namespace sql
             return make_unary(UnaryOperator::Minus, parse_unary());
         }
         if (consume_optional(TokenType::Exclamation))
+        {
+            return make_unary(UnaryOperator::LogicalNot, parse_unary());
+        }
+        if (match_keyword("NOT"))
         {
             return make_unary(UnaryOperator::LogicalNot, parse_unary());
         }

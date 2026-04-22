@@ -124,6 +124,19 @@ TEST_CASE("parses UNIQUE synonym for DISTINCT")
     CHECK_EQ(statement.select.order_by[0].expression->text, "category");
 }
 
+TEST_CASE("parses SQL keyword predicates inside WHERE clause")
+{
+    const auto statement = sql_test::parse_statement("SELECT title FROM tasks WHERE NOT done AND priority BETWEEN 3 AND 9 AND owner LIKE 'op%' OR title REGEXP '^Patch';");
+
+    CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
+    REQUIRE(statement.select.where != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.where->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(statement.select.where->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalOr));
+    REQUIRE(statement.select.where->right != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.where->right->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(statement.select.where->right->binary_operator), static_cast<int>(sql::BinaryOperator::Regexp));
+}
+
 TEST_CASE("rejects unsupported statements")
 {
     CHECK_THROWS_AS(sql_test::parse_statement("MERGE INTO todos;"), std::runtime_error);
