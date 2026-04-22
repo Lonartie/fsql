@@ -265,5 +265,47 @@ TEST_CASE("combines multiple select sources and derived tables in a reporting wo
     CHECK(text.find("2 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("uses EXISTS and IN predicate subqueries in a larger triage workflow")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (id, title, team_id, status, severity);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name, on_call);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE escalations (task_id, active);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (1, 'Patch release', 10, 'open', 9);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (2, 'Write docs', 20, 'open', 3);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (3, 'Rotate keys', 30, 'open', 8);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops', true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (20, 'docs', false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (30, 'sec', true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO escalations VALUES (1, true);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO escalations VALUES (3, true);"));
+
+    context.executor.execute(sql_test::parse_statement(
+        "UPDATE tasks SET status = 'priority' "
+        "WHERE EXISTS (SELECT id FROM teams WHERE on_call = true) "
+        "AND team_id IN (SELECT id FROM teams WHERE on_call = true) "
+        "AND id IN (SELECT task_id FROM escalations WHERE active = true);"));
+
+    const auto updated = context.storage->load_table("tasks");
+    REQUIRE_EQ(updated.rows.size(), 3U);
+    CHECK_EQ(updated.rows[0][3], "priority");
+    CHECK_EQ(updated.rows[1][3], "open");
+    CHECK_EQ(updated.rows[2][3], "priority");
+
+    context.reset_output();
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title, status FROM tasks "
+        "WHERE id IN (SELECT task_id FROM escalations WHERE active = true) "
+        "OR (EXISTS (SELECT id FROM teams WHERE name = 'docs') AND team_id IN (SELECT id FROM teams WHERE name = 'docs')) "
+        "ORDER BY title;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Rotate keys") != std::string::npos);
+    CHECK(text.find("Write docs") != std::string::npos);
+    CHECK(text.find("3 row(s) selected") != std::string::npos);
+}
+
 TEST_SUITE_END();
 

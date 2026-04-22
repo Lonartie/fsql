@@ -145,6 +145,11 @@ namespace sql
         /// @return Expression node.
         ExpressionPtr make_select(SelectStatement statement) const;
 
+        /// @brief Creates an EXISTS expression node.
+        /// @param statement Nested select statement.
+        /// @return Expression node.
+        ExpressionPtr make_exists(SelectStatement statement) const;
+
         /// @brief Creates a unary expression node.
         /// @param op Unary operator.
         /// @param operand Operand expression.

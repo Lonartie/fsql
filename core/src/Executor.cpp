@@ -249,6 +249,8 @@ namespace sql
                 return make_numeric(((left.numeric && right.numeric) ? (left.number > right.number) : (left.text > right.text)) ? 1.0 : 0.0);
             case BinaryOperator::GreaterEqual:
                 return make_numeric(((left.numeric && right.numeric) ? (left.number >= right.number) : (left.text >= right.text)) ? 1.0 : 0.0);
+            case BinaryOperator::In:
+                fail("IN subqueries require dedicated evaluation");
             case BinaryOperator::Like:
                 return make_numeric(like_matches(left.text, right.text) ? 1.0 : 0.0);
             case BinaryOperator::Regexp:
@@ -281,6 +283,10 @@ namespace sql
         EvaluatedValue evaluate_expression(const ExpressionPtr& expression, const Table& table, const Row& row, const IStorage& storage);
 
         EvaluatedValue evaluate_select_expression(const SelectStatement& stmt, const IStorage& storage);
+
+        bool evaluate_exists_expression(const SelectStatement& stmt, const IStorage& storage);
+
+        EvaluatedValue evaluate_in_subquery(const EvaluatedValue& left, const ExpressionPtr& right, const IStorage& storage);
 
         SelectResult run_select_statement(const SelectStatement& stmt, const IStorage& storage);
 
@@ -420,6 +426,12 @@ namespace sql
                     fail("Missing SELECT expression payload");
                 }
                 return "(" + serialize_select_statement(*expression->select) + ")";
+            case ExpressionKind::Exists:
+                if (!expression->select)
+                {
+                    fail("Missing EXISTS expression payload");
+                }
+                return "EXISTS (" + serialize_select_statement(*expression->select) + ")";
             case ExpressionKind::FunctionCall:
             {
                 std::ostringstream stream;
@@ -468,6 +480,7 @@ namespace sql
                 case BinaryOperator::LessEqual: op = "<="; break;
                 case BinaryOperator::Greater: op = ">"; break;
                 case BinaryOperator::GreaterEqual: op = ">="; break;
+                case BinaryOperator::In: op = "IN"; break;
                 case BinaryOperator::Like: op = "LIKE"; break;
                 case BinaryOperator::Regexp: op = "REGEXP"; break;
                 case BinaryOperator::Equal: op = "="; break;
@@ -628,6 +641,7 @@ namespace sql
                 return contains_aggregate_function(expression->left);
             case ExpressionKind::Binary:
                 return contains_aggregate_function(expression->left) || contains_aggregate_function(expression->right);
+            case ExpressionKind::Exists:
             case ExpressionKind::Select:
             case ExpressionKind::Literal:
             case ExpressionKind::Identifier:
@@ -896,6 +910,8 @@ namespace sql
             case ExpressionKind::Identifier:
                 static_cast<void>(resolve_select_column_index(table, expression->text));
                 return;
+            case ExpressionKind::Exists:
+                return;
             case ExpressionKind::FunctionCall:
                 for (const auto& argument : expression->arguments)
                 {
@@ -943,6 +959,7 @@ namespace sql
             switch (expression->kind)
             {
             case ExpressionKind::Literal:
+            case ExpressionKind::Exists:
             case ExpressionKind::Select:
                 return;
             case ExpressionKind::Identifier:
@@ -998,11 +1015,21 @@ namespace sql
                     fail("Missing SELECT expression payload");
                 }
                 return evaluate_select_expression(*expression->select, storage);
+            case ExpressionKind::Exists:
+                if (!expression->select)
+                {
+                    fail("Missing EXISTS expression payload");
+                }
+                return make_numeric(evaluate_exists_expression(*expression->select, storage) ? 1.0 : 0.0);
             case ExpressionKind::FunctionCall:
                 return evaluate_function(*expression);
             case ExpressionKind::Unary:
                 return apply_unary_operator(expression->unary_operator, evaluate_select_row_expression(expression->left, table, row, storage));
             case ExpressionKind::Binary:
+                if (expression->binary_operator == BinaryOperator::In)
+                {
+                    return evaluate_in_subquery(evaluate_select_row_expression(expression->left, table, row, storage), expression->right, storage);
+                }
                 return apply_binary_operator(expression->binary_operator,
                                              evaluate_select_row_expression(expression->left, table, row, storage),
                                              evaluate_select_row_expression(expression->right, table, row, storage));
@@ -1161,6 +1188,12 @@ namespace sql
                     fail("Missing SELECT expression payload");
                 }
                 return evaluate_select_expression(*expression->select, storage);
+            case ExpressionKind::Exists:
+                if (!expression->select)
+                {
+                    fail("Missing EXISTS expression payload");
+                }
+                return make_numeric(evaluate_exists_expression(*expression->select, storage) ? 1.0 : 0.0);
             case ExpressionKind::FunctionCall:
                 if (is_aggregate_function_name(expression->text))
                 {
@@ -1170,6 +1203,10 @@ namespace sql
             case ExpressionKind::Unary:
                 return apply_unary_operator(expression->unary_operator, evaluate_grouped_expression(expression->left, table, representative_row, rows, storage));
             case ExpressionKind::Binary:
+                if (expression->binary_operator == BinaryOperator::In)
+                {
+                    return evaluate_in_subquery(evaluate_grouped_expression(expression->left, table, representative_row, rows, storage), expression->right, storage);
+                }
                 return apply_binary_operator(expression->binary_operator,
                                              evaluate_grouped_expression(expression->left, table, representative_row, rows, storage),
                                              evaluate_grouped_expression(expression->right, table, representative_row, rows, storage));
@@ -1389,6 +1426,40 @@ namespace sql
             return make_text(result.rows[0][0]);
         }
 
+        bool evaluate_exists_expression(const SelectStatement& stmt, const IStorage& storage)
+        {
+            const auto result = run_select_statement(stmt, storage);
+            return !result.rows.empty();
+        }
+
+        EvaluatedValue evaluate_in_subquery(const EvaluatedValue& left, const ExpressionPtr& right, const IStorage& storage)
+        {
+            if (!right || right->kind != ExpressionKind::Select || !right->select)
+            {
+                fail("IN currently requires a SELECT subquery");
+            }
+
+            const auto result = run_select_statement(*right->select, storage);
+            if (result.column_names.size() != 1)
+            {
+                fail("IN subquery must return exactly one column");
+            }
+
+            for (const auto& row : result.rows)
+            {
+                if (row.empty())
+                {
+                    continue;
+                }
+                if (compare_values(left, make_text(row[0])) == 0)
+                {
+                    return make_numeric(1.0);
+                }
+            }
+
+            return make_numeric(0.0);
+        }
+
         EvaluatedValue evaluate_expression(const ExpressionPtr& expression, const Table& table, const Row& row, const IStorage& storage)
         {
             if (!expression)
@@ -1418,11 +1489,21 @@ namespace sql
                     fail("Missing SELECT expression payload");
                 }
                 return evaluate_select_expression(*expression->select, storage);
+            case ExpressionKind::Exists:
+                if (!expression->select)
+                {
+                    fail("Missing EXISTS expression payload");
+                }
+                return make_numeric(evaluate_exists_expression(*expression->select, storage) ? 1.0 : 0.0);
             case ExpressionKind::FunctionCall:
                 return evaluate_function(*expression);
             case ExpressionKind::Unary:
                 return apply_unary_operator(expression->unary_operator, evaluate_expression(expression->left, table, row, storage));
             case ExpressionKind::Binary:
+                if (expression->binary_operator == BinaryOperator::In)
+                {
+                    return evaluate_in_subquery(evaluate_expression(expression->left, table, row, storage), expression->right, storage);
+                }
                 return apply_binary_operator(expression->binary_operator,
                                              evaluate_expression(expression->left, table, row, storage),
                                              evaluate_expression(expression->right, table, row, storage));

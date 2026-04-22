@@ -155,6 +155,78 @@ TEST_CASE("supports scalar SELECT subqueries with aliased source subqueries")
     CHECK(text.find("1 row(s) selected") != std::string::npos);
 }
 
+TEST_CASE("supports EXISTS predicates in WHERE expressions")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 20);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE EXISTS (SELECT id FROM teams WHERE name = 'ops') AND team_id IN (SELECT id FROM teams WHERE name = 'ops');"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Write docs") == std::string::npos);
+    CHECK(text.find("1 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("supports IN subquery predicates in WHERE expressions")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 20);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Rotate keys', 30);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (30, 'sec');"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE team_id IN (SELECT id FROM teams WHERE name = 'ops' OR name = 'sec') ORDER BY title;"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") != std::string::npos);
+    CHECK(text.find("Rotate keys") != std::string::npos);
+    CHECK(text.find("Write docs") == std::string::npos);
+    CHECK(text.find("2 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("treats empty EXISTS and IN subqueries as false")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10);"));
+    context.reset_output();
+
+    context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE EXISTS (SELECT id FROM teams WHERE name = 'ops') OR team_id IN (SELECT id FROM teams WHERE name = 'ops');"));
+
+    const auto text = context.output.str();
+    CHECK(text.find("Patch release") == std::string::npos);
+    CHECK(text.find("0 row(s) selected") != std::string::npos);
+}
+
+TEST_CASE("rejects IN subqueries returning multiple columns")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT title FROM tasks WHERE team_id IN (SELECT id, name FROM teams);")), std::runtime_error);
+}
+
 TEST_CASE("supports SELECT subqueries in INSERT values")
 {
     sql_test::ExecutorContext context;

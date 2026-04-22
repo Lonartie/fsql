@@ -76,6 +76,7 @@ namespace sql
         Literal,
         Identifier,
         Select,
+        Exists,
         FunctionCall,
         Unary,
         Binary
@@ -102,6 +103,7 @@ namespace sql
         LessEqual,
         Greater,
         GreaterEqual,
+        In,
         Like,
         Regexp,
         Equal,

@@ -461,6 +461,17 @@ namespace sql
             {
                 expression = make_binary(BinaryOperator::GreaterEqual, expression, parse_additive());
             }
+            else if (match_keyword("IN"))
+            {
+                expect(TokenType::LParen, "Expected '(' after IN");
+                if (!match_keyword("SELECT"))
+                {
+                    fail("IN currently requires a SELECT subquery");
+                }
+                auto statement = parse_select_statement();
+                expect(TokenType::RParen, "Expected ')' after IN subquery");
+                expression = make_binary(BinaryOperator::In, expression, make_select(std::move(statement)));
+            }
             else if (match_keyword("BETWEEN"))
             {
                 const auto lower = parse_additive();
@@ -560,6 +571,18 @@ namespace sql
 
     ExpressionPtr Parser::parse_primary()
     {
+        if (match_keyword("EXISTS"))
+        {
+            expect(TokenType::LParen, "Expected '(' after EXISTS");
+            if (!match_keyword("SELECT"))
+            {
+                fail("EXISTS requires a SELECT subquery");
+            }
+            auto statement = parse_select_statement();
+            expect(TokenType::RParen, "Expected ')' after EXISTS subquery");
+            return make_exists(std::move(statement));
+        }
+
         if (consume_optional(TokenType::LParen))
         {
             if (match_keyword("SELECT"))
@@ -633,6 +656,14 @@ namespace sql
     {
         auto expression = std::make_shared<Expression>();
         expression->kind = ExpressionKind::Select;
+        expression->select = std::make_shared<SelectStatement>(std::move(statement));
+        return expression;
+    }
+
+    ExpressionPtr Parser::make_exists(SelectStatement statement) const
+    {
+        auto expression = std::make_shared<Expression>();
+        expression->kind = ExpressionKind::Exists;
         expression->select = std::make_shared<SelectStatement>(std::move(statement));
         return expression;
     }

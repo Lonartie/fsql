@@ -5,7 +5,7 @@
 - CREATE VIEW / DROP VIEW command
 - JOINs
 - UNION, UNION ALL, INTERSECT, EXCEPT
-- EXISTS, IN, ANY, ALL
+- ANY, ALL
 - IS NULL, IS NOT NULL (whole null-semantics)
 - Further align operator semantics with SQL standard beyond the implemented keyword operators
   - Standardize remaining non-SQL operators / aliases and edge-case semantics
@@ -20,7 +20,7 @@
     - json_array, json_object, json_array_length, json_array_length, json_array_length, json_array_length, etc.
 - Align default value syntax with SQL standard (e.g. DEFAULT 'value' instead of = 'value')
 - More powerful subqueries returning lists of values
-  - IN (SELECT ...), EXISTS (SELECT ...), etc.
+  - Additional list-returning predicate forms and broader subquery semantics
 
 ## In Progress
 
@@ -44,3 +44,6 @@
   - Multiple table sources in `FROM`
   - Subquery sources in `FROM`
   - Addressing columns by source name (e.g. `table1.column1`) to avoid ambiguity
+- Predicate subqueries in expressions:
+  - EXISTS (SELECT ...)
+  - IN (SELECT ...)
