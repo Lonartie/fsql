@@ -3,55 +3,23 @@
 #include "ConsoleOutputWriter.h"
 #include "CsvStorage.h"
 #include "Executor.h"
-#include "Parser.h"
 #include "ParallelCoroExecutor.h"
-#include "StringUtils.h"
+#include "Parser.h"
+#include "QueryInput.h"
 #include "Tokenizer.h"
 
 #include <exception>
-#include <filesystem>
 #include <iostream>
 #include <memory>
-#include <sstream>
 #include <string>
 
 namespace sql
 {
-    namespace
-    {
-        bool is_wrapper_command(const std::string& command)
-        {
-            return iequals(command, "select") ||
-                iequals(command, "insert") ||
-                iequals(command, "update") ||
-                iequals(command, "delete") ||
-                iequals(command, "create") ||
-                iequals(command, "drop");
-        }
-    }
-
     int Application::run(int argc, char** argv)
     {
         try
         {
-            std::string query;
-            if (argc > 1)
-            {
-                query = join_arguments(argc, argv);
-
-                const std::string executable_name = std::filesystem::path(argv[0]).stem().string();
-                if (is_wrapper_command(executable_name))
-                {
-                    query = executable_name + " " + query;
-                }
-            }
-            else
-            {
-                std::ostringstream buffer;
-                buffer << std::cin.rdbuf();
-                query = trim(buffer.str());
-            }
-
+            const std::string query = QueryInput::read(argc, argv, std::cin);
             if (query.empty())
             {
                 std::cerr << "Usage: sql <SQL statement>\n";
@@ -63,6 +31,7 @@ namespace sql
             auto coro_executor = std::make_shared<ParallelCoroExecutor>();
             Executor executor(std::make_shared<CsvStorage>(), coro_executor);
             ConsoleOutputWriter writer(coro_executor);
+
             const auto result = executor.execute(parser.parse_statement());
             if (!result.success)
             {
@@ -78,19 +47,5 @@ namespace sql
             std::cerr << "Error: " << ex.what() << '\n';
             return 1;
         }
-    }
-
-    std::string Application::join_arguments(int argc, char** argv)
-    {
-        std::ostringstream builder;
-        for (int i = 1; i < argc; ++i)
-        {
-            if (i > 1)
-            {
-                builder << ' ';
-            }
-            builder << argv[i];
-        }
-        return builder.str();
     }
 }

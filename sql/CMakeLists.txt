@@ -5,7 +5,9 @@
 
 # Create a reusable application library
 add_library(sql_app_lib STATIC
+    src/CliHelp.cpp
     src/Application.cpp
+    src/QueryInput.cpp
 )
 
 target_include_directories(sql_app_lib PUBLIC

@@ -1,5 +1,6 @@
 #include "CsvStorage.h"
 
+#include "ColumnMetadata.h"
 #include "SqlError.h"
 #include "StringUtils.h"
 
@@ -11,26 +12,6 @@ namespace sql
 {
     namespace
     {
-        std::string visible_column_name(const std::string& stored_name)
-        {
-            std::string visible_name = stored_name;
-
-            constexpr std::string_view default_marker = " DEFAULT(";
-            const auto default_position = visible_name.find(default_marker);
-            if (default_position != std::string::npos)
-            {
-                visible_name = visible_name.substr(0, default_position);
-            }
-
-            constexpr std::string_view auto_increment_marker = " AUTO_INCREMENT";
-            const auto auto_increment_position = visible_name.find(auto_increment_marker);
-            if (auto_increment_position != std::string::npos)
-            {
-                visible_name = visible_name.substr(0, auto_increment_position);
-            }
-
-            return visible_name;
-        }
 
         Table describe_table_from_stream(std::istream& input, const std::string& table_name)
         {

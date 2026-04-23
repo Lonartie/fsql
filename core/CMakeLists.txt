@@ -1,9 +1,18 @@
 add_library(sql_core STATIC
+    src/ColumnMetadata.cpp
     src/ConsoleOutputWriter.cpp
     src/CsvStorage.cpp
+    src/ExpressionValue.cpp
+    src/ExpressionEvaluation.cpp
     src/Executor.cpp
     src/MemoryStorage.cpp
     src/Parser.cpp
+    src/ParserExpressions.cpp
+    src/ParserStatements.cpp
+    src/SelectAggregation.cpp
+    src/SelectExecution.cpp
+    src/SelectPlanning.cpp
+    src/SqlSerialization.cpp
     src/Tokenizer.cpp
 )
 
