@@ -423,6 +423,21 @@ namespace sql
             return source;
         }
 
+        if (check(TokenType::String))
+        {
+            source.kind = SelectSource::Kind::FilePath;
+            source.name = advance().text;
+            if (match_keyword("AS"))
+            {
+                source.alias = expect_identifier("Expected alias after AS");
+            }
+            else if (check(TokenType::Identifier) && !is_select_source_terminator(peek()))
+            {
+                source.alias = advance().text;
+            }
+            return source;
+        }
+
         source.kind = SelectSource::Kind::Table;
         source.name = expect_identifier("Expected table name");
         if (match_keyword("AS"))

@@ -31,6 +31,36 @@ namespace sql
 
             return visible_name;
         }
+
+        Table load_table_from_stream(std::istream& input, const std::string& table_name)
+        {
+            Table table;
+            table.name = table_name;
+
+            std::string line;
+            if (!std::getline(input, line))
+            {
+                fail("Table is empty or invalid: " + table_name);
+            }
+
+            table.columns = CsvStorage::parse_csv_line(line);
+            if (table.columns.empty())
+            {
+                fail("Table has no columns: " + table_name);
+            }
+
+            while (std::getline(input, line))
+            {
+                auto row = CsvStorage::parse_csv_line(line);
+                if (row.size() != table.columns.size())
+                {
+                    fail("Row column count mismatch in table: " + table_name);
+                }
+                table.rows.push_back(std::move(row));
+            }
+
+            return table;
+        }
     }
 
     CsvStorage::CsvStorage() : root_directory_(std::filesystem::current_path())
@@ -70,32 +100,32 @@ namespace sql
             fail("Table does not exist: " + table_name);
         }
 
-        Table table;
-        table.name = table_name;
+        return load_table_from_stream(input, table_name);
+    }
 
-        std::string line;
-        if (!std::getline(input, line))
+    std::filesystem::path CsvStorage::resolve_table_source_path(std::filesystem::path path)
+    {
+        if (path.extension().empty())
         {
-            fail("Table is empty or invalid: " + table_name);
-        }
-
-        table.columns = parse_csv_line(line);
-        if (table.columns.empty())
-        {
-            fail("Table has no columns: " + table_name);
-        }
-
-        while (std::getline(input, line))
-        {
-            auto row = parse_csv_line(line);
-            if (row.size() != table.columns.size())
+            const auto with_csv_extension = path.string() + ".csv";
+            if (!std::filesystem::exists(path) && std::filesystem::exists(with_csv_extension))
             {
-                fail("Row column count mismatch in table: " + table_name);
+                path = with_csv_extension;
             }
-            table.rows.push_back(std::move(row));
+        }
+        return path;
+    }
+
+    Table CsvStorage::load_table_from_path(std::filesystem::path path)
+    {
+        path = resolve_table_source_path(std::move(path));
+        std::ifstream input(path);
+        if (!input)
+        {
+            fail("Table file does not exist: " + path.string());
         }
 
-        return table;
+        return load_table_from_stream(input, path.stem().string());
     }
 
     ViewDefinition CsvStorage::load_view(const std::string& view_name) const

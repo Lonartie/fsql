@@ -6,6 +6,7 @@
 #include "Parser.h"
 #include "Tokenizer.h"
 
+#include <filesystem>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -24,6 +25,11 @@ namespace sql_test
         sql::Tokenizer tokenizer(query);
         sql::Parser parser(tokenizer.tokenize());
         return parser.parse_expression();
+    }
+
+    inline std::filesystem::path fixture_path(const std::string& name)
+    {
+        return std::filesystem::path(__FILE__).parent_path() / "fixtures" / name;
     }
 
     struct ExecutorContext

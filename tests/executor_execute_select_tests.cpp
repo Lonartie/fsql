@@ -151,6 +151,46 @@ TEST_CASE("select reads rows from created views")
     CHECK_EQ(result.message, "2 row(s) selected");
 }
 
+TEST_CASE("select reads rows from file path sources with optional csv extension")
+{
+    sql_test::ExecutorContext context;
+
+    const auto tasks_fixture = sql_test::fixture_path("file_source_tasks.csv");
+    auto tasks_without_extension = tasks_fixture;
+    tasks_without_extension.replace_extension();
+
+    const auto result = context.executor.execute(sql_test::parse_statement(
+        "SELECT src.title FROM '" + tasks_without_extension.string() + "' src WHERE src.done = false ORDER BY src.title;"));
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 2U);
+    CHECK_EQ(table.rows[0][0], "Patch release");
+    CHECK_EQ(table.rows[1][0], "Write docs");
+    CHECK_EQ(result.message, "2 row(s) selected");
+}
+
+TEST_CASE("select combines multiple file path sources with aliases")
+{
+    sql_test::ExecutorContext context;
+
+    const auto tasks_fixture = sql_test::fixture_path("file_source_tasks.csv");
+    auto tasks_without_extension = tasks_fixture;
+    tasks_without_extension.replace_extension();
+    const auto teams_fixture = sql_test::fixture_path("file_source_teams.csv");
+
+    const auto result = context.executor.execute(sql_test::parse_statement(
+        "SELECT tasks.title, teams.name FROM '" + tasks_without_extension.string() + "' tasks, '" + teams_fixture.string() + "' teams "
+        "WHERE tasks.team_id = teams.id AND tasks.done = false ORDER BY tasks.title;"));
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 2U);
+    CHECK_EQ(table.rows[0][0], "Patch release");
+    CHECK_EQ(table.rows[0][1], "ops");
+    CHECK_EQ(table.rows[1][0], "Write docs");
+    CHECK_EQ(table.rows[1][1], "docs");
+    CHECK_EQ(result.message, "2 row(s) selected");
+}
+
 TEST_CASE("select supports views built on other views")
 {
     sql_test::ExecutorContext context;

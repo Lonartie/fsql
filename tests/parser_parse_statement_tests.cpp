@@ -214,6 +214,20 @@ TEST_CASE("parses multiple select sources and qualified identifiers")
     CHECK_EQ(static_cast<int>(statement.select.where->binary_operator), static_cast<int>(sql::BinaryOperator::Equal));
 }
 
+TEST_CASE("parses quoted file path select sources")
+{
+    const auto statement = sql_test::parse_statement("SELECT src.title FROM '/Users/name/data' src WHERE src.done = false;");
+
+    CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
+    REQUIRE_EQ(statement.select.sources.size(), 1U);
+    CHECK_EQ(static_cast<int>(statement.select.sources[0].kind), static_cast<int>(sql::SelectSource::Kind::FilePath));
+    CHECK_EQ(statement.select.sources[0].name, "/Users/name/data");
+    REQUIRE(statement.select.sources[0].alias.has_value());
+    CHECK_EQ(*statement.select.sources[0].alias, "src");
+    REQUIRE_EQ(statement.select.projections.size(), 1U);
+    CHECK_EQ(statement.select.projections[0]->text, "src.title");
+}
+
 TEST_CASE("parses select source subqueries with aliases")
 {
     const auto statement = sql_test::parse_statement("SELECT t.title, defaults.category FROM tasks t, (SELECT category FROM settings) defaults WHERE t.category = defaults.category;");

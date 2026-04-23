@@ -479,6 +479,10 @@ namespace sql
             {
                 stream << source.name;
             }
+            else if (source.kind == SelectSource::Kind::FilePath)
+            {
+                stream << quote_string(source.name);
+            }
             else
             {
                 if (!source.subquery)
@@ -1078,9 +1082,31 @@ namespace sql
             return table.columns[index].column_name;
         }
 
+        std::string default_select_source_name(const SelectSource& source)
+        {
+            if (source.kind == SelectSource::Kind::FilePath)
+            {
+                return CsvStorage::resolve_table_source_path(source.name).stem().string();
+            }
+            return source.name;
+        }
+
         MaterializedSelectSource materialize_select_source(const SelectSource& source, const IStorage& storage)
         {
             MaterializedSelectSource materialized;
+            if (source.kind == SelectSource::Kind::FilePath)
+            {
+                const auto table = CsvStorage::load_table_from_path(source.name);
+                materialized.source_name = source.alias.value_or(default_select_source_name(source));
+                materialized.column_names.reserve(table.columns.size());
+                for (const auto& column : table.columns)
+                {
+                    materialized.column_names.push_back(visible_column_name(column));
+                }
+                materialized.rows = table.rows;
+                return materialized;
+            }
+
             if (source.kind == SelectSource::Kind::Table)
             {
                 const bool has_table = storage.has_table(source.name);
@@ -1090,7 +1116,7 @@ namespace sql
                     fail("Name collision between table and view: " + source.name);
                 }
 
-                materialized.source_name = source.alias.value_or(source.name);
+                materialized.source_name = source.alias.value_or(default_select_source_name(source));
                 if (has_view)
                 {
                     const auto result = run_view_statement(source.name, storage);

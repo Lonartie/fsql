@@ -2,8 +2,10 @@
 
 ## Planned
 - Align default value syntax with SQL standard (e.g. DEFAULT 'value' instead of = 'value')
-- JOINs
-- Allow file paths as table sources like `SELECT * FROM '/Users/name/data'` with file extension optional
+- JOINs, ALIAS, and more complex multi-table queries:
+  - INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL OUTER JOIN
+  - Table aliases in FROM and JOIN clauses
+  - Complex join conditions with AND/OR
 - UNION, UNION ALL, INTERSECT, EXCEPT
 - Use coroutines for processing large datasets and streaming results instead of loading everything into memory at once
   - Use nested fork/join model for loading/processing/outputting data 
@@ -52,6 +54,9 @@
   - Multiple table sources in `FROM`
   - Subquery sources in `FROM`
   - Addressing columns by source name (e.g. `table1.column1`) to avoid ambiguity
+- File paths as SELECT sources:
+  - Quoted file path sources in `FROM`
+  - Optional `.csv` file extension when resolving paths
 - Predicate subqueries in expressions:
   - EXISTS (SELECT ...)
   - IN (SELECT ...)

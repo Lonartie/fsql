@@ -265,10 +265,11 @@ namespace sql
         enum class Kind
         {
             Table,
+            FilePath,
             Subquery
         } kind = Kind::Table;
 
-        /// @brief Table name when @ref kind is `Table`.
+        /// @brief Table name or file path when @ref kind is `Table` or `FilePath`.
         std::string name;
 
         /// @brief Nested select statement when @ref kind is `Subquery`.

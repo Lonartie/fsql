@@ -40,6 +40,16 @@ namespace sql
         /// @return Loaded table.
         Table load_table(const std::string& table_name) const override;
 
+        /// @brief Resolves a direct CSV file source path, optionally appending `.csv`.
+        /// @param path Candidate file path.
+        /// @return Resolved file path.
+        static std::filesystem::path resolve_table_source_path(std::filesystem::path path);
+
+        /// @brief Loads a table directly from a CSV file path.
+        /// @param path CSV file path with optional `.csv` extension omitted.
+        /// @return Loaded table.
+        static Table load_table_from_path(std::filesystem::path path);
+
         /// @brief Loads a view definition from disk.
         /// @param view_name Logical view name.
         /// @return Loaded view definition.
