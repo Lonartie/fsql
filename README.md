@@ -980,7 +980,7 @@ Or run the doctest binary directly:
 
 To see planned and completed work, check:
 
-- [`progress.md`](./progress.md)
+- [`progress.md`](PROGRESS.md)
 
 That file tracks both implemented features and explicitly planned follow-up work such as:
 
