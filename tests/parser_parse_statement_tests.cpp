@@ -133,9 +133,10 @@ TEST_CASE("accepts statements without semicolons")
     const auto statement = sql_test::parse_statement("SELECT title FROM todos");
     CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
     REQUIRE_EQ(statement.select.projections.size(), 1U);
-    REQUIRE(statement.select.projections[0] != nullptr);
-    CHECK_EQ(static_cast<int>(statement.select.projections[0]->kind), static_cast<int>(sql::ExpressionKind::Identifier));
-    CHECK_EQ(statement.select.projections[0]->text, "title");
+    REQUIRE(statement.select.projections[0].expression != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.projections[0].expression->kind), static_cast<int>(sql::ExpressionKind::Identifier));
+    CHECK_EQ(statement.select.projections[0].expression->text, "title");
+    CHECK_FALSE(statement.select.projections[0].alias.has_value());
 }
 
 TEST_CASE("parses aggregate select projections")
@@ -145,16 +146,32 @@ TEST_CASE("parses aggregate select projections")
     CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
     CHECK_FALSE(statement.select.select_all);
     REQUIRE_EQ(statement.select.projections.size(), 5U);
-    REQUIRE(statement.select.projections[0] != nullptr);
-    CHECK_EQ(static_cast<int>(statement.select.projections[0]->kind), static_cast<int>(sql::ExpressionKind::FunctionCall));
-    CHECK_EQ(statement.select.projections[0]->text, "COUNT");
-    CHECK(statement.select.projections[0]->function_uses_star);
-    CHECK(statement.select.projections[0]->arguments.empty());
-    REQUIRE(statement.select.projections[1] != nullptr);
-    CHECK_EQ(statement.select.projections[1]->text, "SUM");
-    REQUIRE_EQ(statement.select.projections[1]->arguments.size(), 1U);
-    CHECK_EQ(statement.select.projections[1]->arguments[0]->text, "amount");
+    REQUIRE(statement.select.projections[0].expression != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.projections[0].expression->kind), static_cast<int>(sql::ExpressionKind::FunctionCall));
+    CHECK_EQ(statement.select.projections[0].expression->text, "COUNT");
+    CHECK(statement.select.projections[0].expression->function_uses_star);
+    CHECK(statement.select.projections[0].expression->arguments.empty());
+    REQUIRE(statement.select.projections[1].expression != nullptr);
+    CHECK_EQ(statement.select.projections[1].expression->text, "SUM");
+    REQUIRE_EQ(statement.select.projections[1].expression->arguments.size(), 1U);
+    CHECK_EQ(statement.select.projections[1].expression->arguments[0]->text, "amount");
     CHECK(statement.select.where != nullptr);
+}
+
+TEST_CASE("parses select list AS aliases")
+{
+    const auto statement = sql_test::parse_statement("SELECT title AS task_title, priority + 1 AS next_priority FROM tasks;");
+
+    CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Select));
+    REQUIRE_EQ(statement.select.projections.size(), 2U);
+    REQUIRE(statement.select.projections[0].expression != nullptr);
+    CHECK_EQ(statement.select.projections[0].expression->text, "title");
+    REQUIRE(statement.select.projections[0].alias.has_value());
+    CHECK_EQ(*statement.select.projections[0].alias, "task_title");
+    REQUIRE(statement.select.projections[1].expression != nullptr);
+    CHECK_EQ(static_cast<int>(statement.select.projections[1].expression->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    REQUIRE(statement.select.projections[1].alias.has_value());
+    CHECK_EQ(*statement.select.projections[1].alias, "next_priority");
 }
 
 TEST_CASE("parses select result shaping clauses")
@@ -208,8 +225,8 @@ TEST_CASE("parses multiple select sources and qualified identifiers")
     CHECK_EQ(statement.select.sources[0].name, "tasks");
     CHECK_EQ(statement.select.sources[1].name, "teams");
     REQUIRE_EQ(statement.select.projections.size(), 2U);
-    CHECK_EQ(statement.select.projections[0]->text, "tasks.title");
-    CHECK_EQ(statement.select.projections[1]->text, "teams.name");
+    CHECK_EQ(statement.select.projections[0].expression->text, "tasks.title");
+    CHECK_EQ(statement.select.projections[1].expression->text, "teams.name");
     REQUIRE(statement.select.where != nullptr);
     CHECK_EQ(static_cast<int>(statement.select.where->kind), static_cast<int>(sql::ExpressionKind::Binary));
     CHECK_EQ(static_cast<int>(statement.select.where->binary_operator), static_cast<int>(sql::BinaryOperator::Equal));
@@ -226,7 +243,7 @@ TEST_CASE("parses quoted file path select sources")
     REQUIRE(statement.select.sources[0].alias.has_value());
     CHECK_EQ(*statement.select.sources[0].alias, "src");
     REQUIRE_EQ(statement.select.projections.size(), 1U);
-    CHECK_EQ(statement.select.projections[0]->text, "src.title");
+    CHECK_EQ(statement.select.projections[0].expression->text, "src.title");
 }
 
 TEST_CASE("parses quoted file paths everywhere table or view references are accepted")

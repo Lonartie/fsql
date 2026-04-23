@@ -151,7 +151,7 @@ namespace sql::detail
         std::map<std::string, ExpressionPtr> definitions;
         for (const auto& projection : stmt.projections)
         {
-            collect_aggregate_definitions_from_expression(projection, definitions);
+            collect_aggregate_definitions_from_expression(projection.expression, definitions);
         }
         for (const auto& order_by : stmt.order_by)
         {

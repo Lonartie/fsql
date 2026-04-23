@@ -70,6 +70,14 @@ namespace sql
         /// @return Parsed expressions.
         std::vector<ExpressionPtr> parse_expression_list();
 
+        /// @brief Parses a single SELECT projection with an optional `AS` alias.
+        /// @return Parsed projection.
+        SelectProjection parse_select_projection();
+
+        /// @brief Parses a comma-separated SELECT projection list.
+        /// @return Parsed projections.
+        std::vector<SelectProjection> parse_select_projection_list();
+
         /// @brief Parses a comma-separated ORDER BY list.
         /// @return Parsed ORDER BY terms.
         std::vector<SelectOrderBy> parse_order_by_list();

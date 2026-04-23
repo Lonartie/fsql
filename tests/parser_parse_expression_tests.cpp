@@ -14,9 +14,9 @@ TEST_CASE("parses SELECT subquery as expression")
     REQUIRE_EQ(expression->select->sources.size(), 1U);
     CHECK_EQ(expression->select->sources[0].name, "defaults");
     REQUIRE_EQ(expression->select->projections.size(), 1U);
-    REQUIRE(expression->select->projections[0] != nullptr);
-    CHECK_EQ(static_cast<int>(expression->select->projections[0]->kind), static_cast<int>(sql::ExpressionKind::Identifier));
-    CHECK_EQ(expression->select->projections[0]->text, "category");
+    REQUIRE(expression->select->projections[0].expression != nullptr);
+    CHECK_EQ(static_cast<int>(expression->select->projections[0].expression->kind), static_cast<int>(sql::ExpressionKind::Identifier));
+    CHECK_EQ(expression->select->projections[0].expression->text, "category");
     CHECK(expression->select->where != nullptr);
 }
 
@@ -30,7 +30,7 @@ TEST_CASE("parses SELECT subquery expression with multiple sources")
     CHECK_EQ(expression->select->sources[0].name, "tasks");
     CHECK_EQ(expression->select->sources[1].name, "teams");
     REQUIRE_EQ(expression->select->projections.size(), 1U);
-    CHECK_EQ(expression->select->projections[0]->text, "tasks.title");
+    CHECK_EQ(expression->select->projections[0].expression->text, "tasks.title");
     REQUIRE(expression->select->where != nullptr);
 }
 

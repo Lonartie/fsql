@@ -255,7 +255,7 @@ namespace sql
         }
         else
         {
-            stmt.projections = parse_expression_list();
+            stmt.projections = parse_select_projection_list();
         }
 
         expect_keyword("FROM");
@@ -416,6 +416,35 @@ namespace sql
             expressions.push_back(parse_expression());
         }
         return expressions;
+    }
+
+    SelectProjection Parser::parse_select_projection()
+    {
+        SelectProjection projection;
+        projection.expression = parse_expression();
+        if (match_keyword("AS"))
+        {
+            if (check(TokenType::Identifier) || check(TokenType::String))
+            {
+                projection.alias = advance().text;
+            }
+            else
+            {
+                fail("Expected alias after AS");
+            }
+        }
+        return projection;
+    }
+
+    std::vector<SelectProjection> Parser::parse_select_projection_list()
+    {
+        std::vector<SelectProjection> projections;
+        projections.push_back(parse_select_projection());
+        while (consume_optional(TokenType::Comma))
+        {
+            projections.push_back(parse_select_projection());
+        }
+        return projections;
     }
 
     std::vector<SelectOrderBy> Parser::parse_order_by_list()

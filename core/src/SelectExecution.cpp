@@ -34,6 +34,36 @@ namespace sql
                 co_yield row;
             }
         }
+
+        std::string select_projection_column_name(const SelectProjection& projection)
+        {
+            return projection.alias.value_or(serialize_expression(projection.expression));
+        }
+
+        std::vector<ProjectedSelectRow> materialize_shaped_source_rows(const SelectStatement& stmt,
+                                                                       const ResolvedSelectTable& table,
+                                                                       const IStorage& storage)
+        {
+            std::vector<ProjectedSelectRow> rows;
+            for (const auto& row : table.rows())
+            {
+                if (stmt.where && !to_bool(evaluate_select_row_expression(stmt.where, table, row, storage)))
+                {
+                    continue;
+                }
+
+                ProjectedSelectRow projected_row;
+                projected_row.values = row;
+                projected_row.order_values.reserve(stmt.order_by.size());
+                for (const auto& order_by : stmt.order_by)
+                {
+                    projected_row.order_values.push_back(evaluate_select_row_expression(order_by.expression, table, row, storage));
+                }
+                rows.push_back(std::move(projected_row));
+            }
+            detail::apply_select_modifiers(stmt, rows);
+            return rows;
+        }
     }
 
     namespace detail
@@ -171,7 +201,7 @@ namespace sql
                 projected_row.reserve(stmt.projections.size());
                 for (const auto& projection : stmt.projections)
                 {
-                    projected_row.push_back(evaluate_select_row_expression(projection, table, row, *storage).text);
+                    projected_row.push_back(evaluate_select_row_expression(projection.expression, table, row, *storage).text);
                 }
                 co_yield projected_row;
                 ++emitted;
@@ -217,8 +247,8 @@ namespace sql
             ExecutionTable result;
             for (const auto& projection : stmt.projections)
             {
-                detail::validate_grouped_expression(projection, table, group_by_identifiers);
-                result.column_names.push_back(serialize_expression(projection));
+                detail::validate_grouped_expression(projection.expression, table, group_by_identifiers);
+                result.column_names.push_back(select_projection_column_name(projection));
             }
             for (const auto& order_by : stmt.order_by)
             {
@@ -244,7 +274,7 @@ namespace sql
                 projected_row.values.reserve(stmt.projections.size());
                 for (const auto& projection : stmt.projections)
                 {
-                    projected_row.values.push_back(evaluate_grouped_expression(projection, table, group, storage).text);
+                    projected_row.values.push_back(evaluate_grouped_expression(projection.expression, table, group, storage).text);
                 }
                 projected_row.order_values.reserve(stmt.order_by.size());
                 for (const auto& order_by : stmt.order_by)
@@ -302,9 +332,9 @@ namespace sql
         bool has_aggregate_projection = false;
         for (const auto& projection : stmt.projections)
         {
-            detail::validate_select_projection(projection, table);
-            has_aggregate_projection = has_aggregate_projection || contains_aggregate_function(projection);
-            result.column_names.push_back(serialize_expression(projection));
+            detail::validate_select_projection(projection.expression, table);
+            has_aggregate_projection = has_aggregate_projection || contains_aggregate_function(projection.expression);
+            result.column_names.push_back(select_projection_column_name(projection));
         }
 
         std::vector<ProjectedSelectRow> projected_rows;
@@ -312,16 +342,13 @@ namespace sql
         {
             const auto aggregate_definitions = detail::collect_aggregate_definitions(stmt);
             auto aggregate_states = detail::make_aggregate_state_map(aggregate_definitions);
-            for (const auto& row : table.rows())
+            const auto shaped_rows = materialize_shaped_source_rows(stmt, table, storage);
+            for (const auto& projected_row : shaped_rows)
             {
-                if (stmt.where && !to_bool(evaluate_select_row_expression(stmt.where, table, row, storage)))
-                {
-                    continue;
-                }
                 for (auto& [aggregate_name, state] : aggregate_states)
                 {
                     static_cast<void>(aggregate_name);
-                    detail::update_aggregate_function(state, table, row, storage);
+                    detail::update_aggregate_function(state, table, projected_row.values, storage);
                 }
             }
 
@@ -329,19 +356,20 @@ namespace sql
             aggregate_row.values.reserve(stmt.projections.size());
             for (const auto& projection : stmt.projections)
             {
-                if (!projection || projection->kind != ExpressionKind::FunctionCall || !detail::is_aggregate_function_name(projection->text))
+                if (!projection.expression
+                    || projection.expression->kind != ExpressionKind::FunctionCall
+                    || !detail::is_aggregate_function_name(projection.expression->text))
                 {
                     fail("Aggregate queries only support aggregate functions in SELECT projections");
                 }
-                const auto state = aggregate_states.find(serialize_expression(projection));
+                const auto state = aggregate_states.find(serialize_expression(projection.expression));
                 if (state == aggregate_states.end())
                 {
-                    fail("Missing aggregate state for expression " + serialize_expression(projection));
+                    fail("Missing aggregate state for expression " + serialize_expression(projection.expression));
                 }
                 aggregate_row.values.push_back(detail::finalize_aggregate_function(state->second).text);
             }
             projected_rows.push_back(std::move(aggregate_row));
-            detail::apply_select_modifiers(stmt, projected_rows);
             return detail::make_buffered_execution_table(std::move(result.column_names), std::move(projected_rows));
         }
 
@@ -364,7 +392,7 @@ namespace sql
             projected_row.values.reserve(stmt.projections.size());
             for (const auto& projection : stmt.projections)
             {
-                projected_row.values.push_back(evaluate_select_row_expression(projection, table, row, storage).text);
+                projected_row.values.push_back(evaluate_select_row_expression(projection.expression, table, row, storage).text);
             }
             projected_row.order_values.reserve(stmt.order_by.size());
             for (const auto& order_by : stmt.order_by)

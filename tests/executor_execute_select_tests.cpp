@@ -161,6 +161,88 @@ TEST_CASE("select supports source subqueries with aliases")
     CHECK_EQ(result.message, "2 row(s) selected");
 }
 
+TEST_CASE("select list AS aliases rename result columns")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, priority);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 8);"));
+
+    const auto result = context.executor.execute(sql_test::parse_statement(
+        "SELECT title AS task_title, priority + 1 AS next_priority FROM tasks;"));
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.column_names.size(), 2U);
+    CHECK_EQ(table.column_names[0], "task_title");
+    CHECK_EQ(table.column_names[1], "next_priority");
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "Patch release");
+    CHECK_EQ(table.rows[0][1], "9");
+}
+
+TEST_CASE("select list quoted string aliases rename result columns")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, priority);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 8);"));
+
+    const auto result = context.executor.execute(sql_test::parse_statement(
+        "SELECT title AS 'Task title', priority + 1 AS \"next priority\" FROM tasks;"));
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.column_names.size(), 2U);
+    CHECK_EQ(table.column_names[0], "Task title");
+    CHECK_EQ(table.column_names[1], "next priority");
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "Patch release");
+    CHECK_EQ(table.rows[0][1], "9");
+}
+
+TEST_CASE("quoted string aliases round trip through views")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', false);"));
+    context.executor.execute(sql_test::parse_statement(
+        "CREATE VIEW open_tasks AS SELECT title AS 'Task title' FROM tasks WHERE done = false;"));
+
+    const auto result = context.executor.execute(sql_test::parse_statement("SELECT * FROM open_tasks;"));
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.column_names.size(), 1U);
+    CHECK_EQ(table.column_names[0], "Task title");
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "Patch release");
+}
+
+TEST_CASE("select list AS aliases propagate through derived tables and views")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Archive logs', true);"));
+    context.executor.execute(sql_test::parse_statement(
+        "CREATE VIEW open_tasks AS SELECT title AS task_title FROM tasks WHERE done = false;"));
+
+    const auto derived_result = context.executor.execute(sql_test::parse_statement(
+        "SELECT derived.task_title FROM (SELECT title AS task_title FROM tasks WHERE done = false) derived;"));
+    const auto& derived_table = sql_test::require_table(derived_result);
+    REQUIRE_EQ(derived_table.column_names.size(), 1U);
+    CHECK_EQ(derived_table.column_names[0], "derived.task_title");
+    REQUIRE_EQ(derived_table.rows.size(), 1U);
+    CHECK_EQ(derived_table.rows[0][0], "Patch release");
+
+    const auto view_result = context.executor.execute(sql_test::parse_statement("SELECT task_title FROM open_tasks;"));
+    const auto& view_table = sql_test::require_table(view_result);
+    REQUIRE_EQ(view_table.column_names.size(), 1U);
+    CHECK_EQ(view_table.column_names[0], "task_title");
+    REQUIRE_EQ(view_table.rows.size(), 1U);
+    CHECK_EQ(view_table.rows[0][0], "Patch release");
+}
+
 TEST_CASE("select reads rows from created views")
 {
     sql_test::ExecutorContext context;
@@ -418,6 +500,31 @@ TEST_CASE("supports typical aggregate functions on filtered rows")
     CHECK_EQ(table.rows[0][3], "15");
     CHECK_EQ(table.rows[0][4], "10");
     CHECK_EQ(table.rows[0][5], "20");
+    CHECK_EQ(result.message, "1 row(s) selected");
+}
+
+TEST_CASE("aggregate queries apply distinct ordering and pagination before finalization")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE metrics (category, value);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO metrics VALUES ('ops', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO metrics VALUES ('ops', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO metrics VALUES ('ops', 20);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO metrics VALUES ('ops', 5);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO metrics VALUES ('docs', 50);"));
+
+    const auto result = context.executor.execute(sql_test::parse_statement(
+        "SELECT DISTINCT COUNT(*) AS shaped_count, SUM(value) AS shaped_sum "
+        "FROM metrics WHERE category = 'ops' ORDER BY value DESC LIMIT 2 OFFSET 0;"));
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.column_names.size(), 2U);
+    CHECK_EQ(table.column_names[0], "shaped_count");
+    CHECK_EQ(table.column_names[1], "shaped_sum");
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "2");
+    CHECK_EQ(table.rows[0][1], "30");
     CHECK_EQ(result.message, "1 row(s) selected");
 }
 

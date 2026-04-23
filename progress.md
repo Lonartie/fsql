@@ -1,13 +1,15 @@
 # Features
 
 ## Planned
-- Aggregate function evaluation order fix: they need to apply after distinct, limit, WHERE and such
+- Add support for more filetypes:
+  - Xml, JSON, toml, yaml
+  - It should be supported to mix them wildly, csv shall be default
+  - CREATE TABLE should be able to support extension detection to automatically detect appropriate storage type
 - Align default value syntax with SQL standard (e.g. DEFAULT 'value' instead of = 'value')
 - JOINs, ALIAS, and more complex multi-table queries:
   - INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL OUTER JOIN
   - Table aliases in FROM and JOIN clauses
   - Complex join conditions with AND/OR
-- AS for column aliases in SELECT list
 - UNION, UNION ALL, INTERSECT, EXCEPT
 - Further NULL semantics alignment beyond the basic literal/predicate support
 - Further align operator semantics with SQL standard beyond the implemented keyword operators
@@ -23,7 +25,6 @@
     - json_array, json_object, json_array_length, json_array_length, json_array_length, json_array_length, etc.
 - More powerful subqueries returning lists of values
   - Additional list-returning predicate forms and broader subquery semantics
-- Overhaul main help page and README
 - Create SYNTAX.md with detailed syntax documentation since this project is not real SQL
 
 ## Completed
@@ -36,6 +37,7 @@
   - LIMIT
   - OFFSET
   - DISTINCT / UNIQUE
+  - `AS` for column aliases in the `SELECT` list, including quoted string aliases
 - SQL keyword logical operators and predicates in expressions:
   - AND
   - OR
@@ -46,6 +48,7 @@
 - Single-table grouped aggregation:
   - GROUP BY
   - HAVING
+- Aggregate function finalization for aggregate-only `SELECT` queries now runs after input shaping such as `WHERE`, `DISTINCT`, `ORDER BY`, `LIMIT`, and `OFFSET`
 - Multi-source SELECTs:
   - Multiple table sources in `FROM`
   - Subquery sources in `FROM`

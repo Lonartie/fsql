@@ -1,6 +1,7 @@
 #include "SqlSerialization.h"
 
 #include "SqlError.h"
+#include "StringUtils.h"
 
 #include <sstream>
 
@@ -18,6 +19,29 @@ namespace sql
             char* end = nullptr;
             std::strtod(text.c_str(), &end);
             return end != nullptr && *end == '\0';
+        }
+
+        bool is_simple_alias_identifier(const std::string& text)
+        {
+            if (text.empty() || !is_identifier_start(text.front()))
+            {
+                return false;
+            }
+
+            for (const char ch : text)
+            {
+                if (!is_identifier_part(ch))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        std::string serialize_projection_alias(const std::string& alias)
+        {
+            return is_simple_alias_identifier(alias) ? alias : quote_string(alias);
         }
     }
 
@@ -84,7 +108,11 @@ namespace sql
                 {
                     stream << ", ";
                 }
-                stream << serialize_expression(statement.projections[i]);
+                stream << serialize_expression(statement.projections[i].expression);
+                if (statement.projections[i].alias.has_value())
+                {
+                    stream << " AS " << serialize_projection_alias(*statement.projections[i].alias);
+                }
             }
         }
 

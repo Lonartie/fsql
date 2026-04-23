@@ -78,6 +78,7 @@ The currently implemented feature set includes:
   - `ORDER BY`
   - `LIMIT`
   - `OFFSET`
+  - `AS` aliases in the `SELECT` list
 - Expressions and predicates:
   - arithmetic operators
   - logical operators: `AND`, `OR`, `NOT`
@@ -551,6 +552,21 @@ FROM (SELECT title FROM todos WHERE done = false) lookup;
 
 Aliases are supported for subquery sources and are usually the clearest choice when you want to reference projected columns explicitly.
 
+#### Projection aliases
+
+`SELECT` projections can be renamed with `AS`. The alias may be a bare identifier or a quoted string when you want spaces or punctuation in the output header.
+
+```sql
+SELECT title AS task_title, priority + 1 AS next_priority
+FROM tasks;
+
+SELECT title AS 'Task title', priority + 1 AS "next priority"
+FROM tasks;
+
+SELECT derived.task_title
+FROM (SELECT title AS task_title FROM tasks WHERE done = false) derived;
+```
+
 #### File path sources
 
 You can quote a path anywhere a table or view name would normally appear.
@@ -661,6 +677,7 @@ Notes:
 - `HAVING` requires `GROUP BY`
 - aggregate expressions are supported in grouped projections/order/having paths
 - grouped queries do **not** support `SELECT *`
+- for aggregate-only queries without `GROUP BY`, input-row shaping (`WHERE`, `ORDER BY`, `DISTINCT`, `LIMIT`, `OFFSET`) is applied before aggregate functions are finalized
 
 ### 6.6 Subqueries
 

@@ -198,6 +198,16 @@ namespace sql
         bool descending = false;
     };
 
+    /// @brief Parsed `SELECT` projection.
+    struct SelectProjection
+    {
+        /// @brief Expression used for the projected value.
+        ExpressionPtr expression;
+
+        /// @brief Optional output alias introduced with `AS`.
+        std::optional<std::string> alias;
+    };
+
     /// @brief Parsed SELECT source.
     struct SelectSource
     {
@@ -232,7 +242,7 @@ namespace sql
         bool select_all = false;
 
         /// @brief Explicitly selected projections.
-        std::vector<ExpressionPtr> projections;
+        std::vector<SelectProjection> projections;
 
         /// @brief Optional filter expression.
         ExpressionPtr where;
