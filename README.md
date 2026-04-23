@@ -1,8 +1,8 @@
-# csv_sql
+# fsql
 
 > A compact, AI-built C++ SQL-like engine for CSV-backed data, designed to work both as a standalone CLI tool and as an embeddable library.
 
-`csv_sql` is a small but ambitious C++20 project that parses and executes a focused SQL-like dialect over CSV files and in-memory tables. It exposes a reusable core library (`sql_core`), a command-line application (`sql`), command wrappers such as `select` and `insert`, and an automated doctest suite.
+`fsql` is a small but ambitious C++20 project that parses and executes a focused SQL-like dialect over CSV files and in-memory tables. It exposes a reusable core library (`fsqllib`), a command-line application (`fsql`), command wrappers such as `select` and `insert`, and an automated doctest suite.
 
 It is intentionally opinionated: it aims to be understandable and embeddable rather than fully SQL-compatible.
 
@@ -10,9 +10,9 @@ It is intentionally opinionated: it aims to be understandable and embeddable rat
 
 ## Table of contents
 
-1. [What is csv_sql?](#1-what-is-csv_sql)
+1. [What is fsql?](#1-what-is-fsql)
 2. [What is it not?](#2-what-is-it-not)
-3. [How to build csv_sql?](#3-how-to-build-csv_sql)
+3. [How to build fsql?](#3-how-to-build-fsql)
 4. [How to use it as a CLI tool?](#4-how-to-use-it-as-a-cli-tool)
 5. [How to use it as a library?](#5-how-to-use-it-as-a-library)
 6. [SQL-like syntax explained](#6-sql-like-syntax-explained)
@@ -40,14 +40,14 @@ It is intentionally opinionated: it aims to be understandable and embeddable rat
 
 ---
 
-## 1. What is csv_sql?
+## 1. What is fsql?
 
-`csv_sql` is a **SQL-like execution engine** with two main use cases:
+`fsql` is a **SQL-like execution engine** with two main use cases:
 
 - **Standalone CLI tool** for querying and mutating CSV-backed data from the terminal
 - **Reusable C++ library** for applications that want parsing, execution, storage abstraction, streaming results, and output formatting without owning all of that logic themselves
 
-At a high level, `csv_sql` can:
+At a high level, `fsql` can:
 
 - tokenize SQL-like input into tokens
 - parse tokens into an AST
@@ -129,7 +129,7 @@ This project is **not**:
 
 ### Important disclaimer
 
-`csv_sql` intentionally implements a **custom SQL-like dialect**.
+`fsql` intentionally implements a **custom SQL-like dialect**.
 
 Some syntax is SQL-inspired, but not identical to mainstream engines. For example:
 
@@ -143,7 +143,7 @@ If you want a small, readable, embeddable engine that behaves *like SQL in many 
 
 ---
 
-## 3. How to build csv_sql?
+## 3. How to build fsql?
 
 ### Requirements
 
@@ -165,26 +165,26 @@ The project currently builds the following important targets:
 
 | Target | Type | Purpose |
 |---|---|---|
-| `sql_core` | static library | core parsing / execution / storage / streaming engine |
-| `sql_app_lib` | static library | CLI-specific support code |
-| `sql` | executable | main command-line application |
-| `select` | executable | wrapper around `sql` for `SELECT` |
-| `insert` | executable | wrapper around `sql` for `INSERT` |
-| `update` | executable | wrapper around `sql` for `UPDATE` |
-| `delete` | executable | wrapper around `sql` for `DELETE` |
-| `create` | executable | wrapper around `sql` for `CREATE` |
-| `drop` | executable | wrapper around `sql` for `DROP` |
-| `sql_tests` | executable | doctest-based test suite |
+| `fsqllib` | static library | core parsing / execution / storage / streaming engine |
+| `fsqlapplib` | static library | CLI-specific support code |
+| `fsql` | executable | main command-line application |
+| `select` | executable | wrapper around `fsql` for `SELECT` |
+| `insert` | executable | wrapper around `fsql` for `INSERT` |
+| `update` | executable | wrapper around `fsql` for `UPDATE` |
+| `delete` | executable | wrapper around `fsql` for `DELETE` |
+| `create` | executable | wrapper around `fsql` for `CREATE` |
+| `drop` | executable | wrapper around `fsql` for `DROP` |
+| `fsqltests` | executable | doctest-based test suite |
 
 ### Typical build output locations
 
 Depending on your generator/platform, the binaries typically end up under the build tree. In this repository layout, common paths are:
 
 ```text
-build/sql/sql
-build/sql/select
-build/sql/insert
-build/tests/sql_tests
+build/fsql/fsql
+build/fsql/select
+build/fsql/insert
+build/fsqltests/fsqltests
 ```
 
 ---
@@ -199,15 +199,15 @@ That means running the CLI in some folder makes that folder the backing “datab
 Use the main executable when you want to pass complete statements yourself.
 
 ```sh
-./build/sql/sql "CREATE TABLE todos (id AUTO_INCREMENT, title, done = false);"
-./build/sql/sql "INSERT INTO todos (title) VALUES ('Buy milk');"
-./build/sql/sql "SELECT * FROM todos ORDER BY id;"
+./build/fsql/fsql "CREATE TABLE todos (id AUTO_INCREMENT, title, done = false);"
+./build/fsql/fsql "INSERT INTO todos (title) VALUES ('Buy milk');"
+./build/fsql/fsql "SELECT * FROM todos ORDER BY id;"
 ```
 
 You can also pipe a statement through standard input:
 
 ```sh
-echo "SELECT * FROM todos;" | ./build/sql/sql
+echo "SELECT * FROM todos;" | ./build/fsql/fsql
 ```
 
 ### 4.2 Wrapper executables
@@ -216,31 +216,31 @@ Wrapper executables prepend the statement keyword automatically.
 This is convenient when you are repeatedly working with a single statement family.
 
 ```sh
-./build/sql/create "TABLE todos (title, done = false);"
-./build/sql/insert "INTO todos VALUES ('Ship release', true);"
-./build/sql/select "* FROM todos WHERE done = false;"
-./build/sql/update "todos SET done = true WHERE title = 'Ship release';"
-./build/sql/delete "FROM todos WHERE done = true;"
-./build/sql/drop "TABLE todos;"
+./build/fsql/create "TABLE todos (title, done = false);"
+./build/fsql/insert "INTO todos VALUES ('Ship release', true);"
+./build/fsql/select "* FROM todos WHERE done = false;"
+./build/fsql/update "todos SET done = true WHERE title = 'Ship release';"
+./build/fsql/delete "FROM todos WHERE done = true;"
+./build/fsql/drop "TABLE todos;"
 ```
 
 ### 4.3 Help output
 
 ```sh
-./build/sql/sql --help
-./build/sql/select --help
-./build/sql/create --help
+./build/fsql/fsql --help
+./build/fsql/select --help
+./build/fsql/create --help
 ```
 
 ### 4.4 CLI session example
 
 ```sh
-./build/sql/sql "CREATE TABLE tasks (id AUTO_INCREMENT, title, category = 'general', done = false);"
-./build/sql/sql "INSERT INTO tasks (title) VALUES ('Write README');"
-./build/sql/sql "INSERT INTO tasks (title, category) VALUES ('Fix parser bug', 'dev');"
-./build/sql/sql "SELECT id, title, category, done FROM tasks ORDER BY category, title;"
-./build/sql/sql "UPDATE tasks SET done = true WHERE title = 'Write README';"
-./build/sql/sql "SELECT title FROM tasks WHERE NOT done OR category = 'dev';"
+./build/fsql/fsql "CREATE TABLE tasks (id AUTO_INCREMENT, title, category = 'general', done = false);"
+./build/fsql/fsql "INSERT INTO tasks (title) VALUES ('Write README');"
+./build/fsql/fsql "INSERT INTO tasks (title, category) VALUES ('Fix parser bug', 'dev');"
+./build/fsql/fsql "SELECT id, title, category, done FROM tasks ORDER BY category, title;"
+./build/fsql/fsql "UPDATE tasks SET done = true WHERE title = 'Write README';"
+./build/fsql/fsql "SELECT title FROM tasks WHERE NOT done OR category = 'dev';"
 ```
 
 ### 4.5 Working with CSV files directly
@@ -249,11 +249,11 @@ Quoted file paths can be used anywhere the dialect would normally accept a table
 That includes `CREATE TABLE`, `CREATE VIEW`, `INSERT INTO`, `UPDATE`, `DELETE FROM`, `DROP TABLE`, `DROP VIEW`, and `SELECT ... FROM ...`.
 
 ```sh
-./build/sql/sql "CREATE TABLE '/tmp/tasks' (id AUTO_INCREMENT, title, done = false);"
-./build/sql/sql "INSERT INTO '/tmp/tasks' (title) VALUES ('Write README');"
-./build/sql/sql "SELECT src.title FROM '/tmp/tasks.csv' src WHERE src.done = false ORDER BY src.title;"
-./build/sql/sql "CREATE VIEW '/tmp/open_tasks' AS SELECT title FROM '/tmp/tasks' WHERE done = false;"
-./build/sql/sql "SELECT * FROM '/tmp/open_tasks';"
+./build/fsql/fsql "CREATE TABLE '/tmp/tasks' (id AUTO_INCREMENT, title, done = false);"
+./build/fsql/fsql "INSERT INTO '/tmp/tasks' (title) VALUES ('Write README');"
+./build/fsql/fsql "SELECT src.title FROM '/tmp/tasks.csv' src WHERE src.done = false ORDER BY src.title;"
+./build/fsql/fsql "CREATE VIEW '/tmp/open_tasks' AS SELECT title FROM '/tmp/tasks' WHERE done = false;"
+./build/fsql/fsql "SELECT * FROM '/tmp/open_tasks';"
 ```
 
 For table files, the `.csv` extension is optional when it can be resolved correctly.
@@ -265,7 +265,7 @@ Relative quoted paths are resolved from the active `CsvStorage` root, which for 
 If you run:
 
 ```sh
-./build/sql/sql "CREATE TABLE todos (title, done);"
+./build/fsql/fsql "CREATE TABLE todos (title, done);"
 ```
 
 from a directory called `workspace/`, the CLI will create something like:
@@ -280,19 +280,19 @@ Views are persisted separately as `.view.sql` files.
 
 ## 5. How to use it as a library?
 
-The main library target is **`sql_core`**.
+The main library target is **`fsqllib`**.
 
 ### 5.1 Typical embedding strategy
 
 If you vendor this repository into another CMake project, the simplest approach is:
 
 ```cmake
-add_subdirectory(csv_sql)
+add_subdirectory(fsql)
 
-target_link_libraries(my_app PRIVATE sql_core)
+target_link_libraries(my_app PRIVATE fsqllib)
 ```
 
-`sql_core` exports its public include directory, so consumers can include the headers from `core/include/`.
+`fsqllib` exports its public include directory, so consumers can include the headers from `fsqllib/include/`.
 
 ### 5.2 The main library concepts
 
@@ -300,19 +300,19 @@ Most embedders will work with these types:
 
 | Type | Role |
 |---|---|
-| `sql::Tokenizer` | turns input text into `Token`s |
-| `sql::Parser` | turns tokens into a parsed `Statement` or `Expression` |
-| `sql::Executor` | executes parsed statements against an `IStorage` |
-| `sql::ExecutionResult` | structured execution outcome |
-| `sql::ExecutionTable` | reopenable streamed result rows for `SELECT` |
-| `sql::IStorage` | abstraction for table/view storage |
-| `sql::CsvStorage` | CSV-backed implementation of `IStorage` |
-| `sql::MemoryStorage` | in-memory implementation of `IStorage` |
-| `sql::ICoroExecutor` | driver for row/value coroutine streams |
-| `sql::SerialCoroExecutor` | serial stream driver |
-| `sql::ParallelCoroExecutor` | overlapped/parallel stream driver |
-| `sql::IOutputWriter` | rendering abstraction for `ExecutionResult` |
-| `sql::ConsoleOutputWriter` | terminal-friendly result formatter |
+| `fsql::Tokenizer` | turns input text into `Token`s |
+| `fsql::Parser` | turns tokens into a parsed `Statement` or `Expression` |
+| `fsql::Executor` | executes parsed statements against an `IStorage` |
+| `fsql::ExecutionResult` | structured execution outcome |
+| `fsql::ExecutionTable` | reopenable streamed result rows for `SELECT` |
+| `fsql::IStorage` | abstraction for table/view storage |
+| `fsql::CsvStorage` | CSV-backed implementation of `IStorage` |
+| `fsql::MemoryStorage` | in-memory implementation of `IStorage` |
+| `fsql::ICoroExecutor` | driver for row/value coroutine streams |
+| `fsql::SerialCoroExecutor` | serial stream driver |
+| `fsql::ParallelCoroExecutor` | overlapped/parallel stream driver |
+| `fsql::IOutputWriter` | rendering abstraction for `ExecutionResult` |
+| `fsql::ConsoleOutputWriter` | terminal-friendly result formatter |
 
 ### 5.3 Minimal library example
 
@@ -330,15 +330,15 @@ Most embedders will work with these types:
 
 int main()
 {
-    auto storage = std::make_shared<sql::MemoryStorage>();
-    auto coro = std::make_shared<sql::ParallelCoroExecutor>();
-    sql::Executor executor(storage, coro);
-    sql::ConsoleOutputWriter writer(coro);
+    auto storage = std::make_shared<fsql::MemoryStorage>();
+    auto coro = std::make_shared<fsql::ParallelCoroExecutor>();
+    fsql::Executor executor(storage, coro);
+    fsql::ConsoleOutputWriter writer(coro);
 
     auto run = [&](const std::string& query)
     {
-        sql::Tokenizer tokenizer(query);
-        sql::Parser parser(tokenizer.tokenize());
+        fsql::Tokenizer tokenizer(query);
+        fsql::Parser parser(tokenizer.tokenize());
         const auto result = executor.execute(parser.parse_statement());
         if (!result.success)
         {
@@ -356,12 +356,12 @@ int main()
 
 ### 5.4 Using the library without console rendering
 
-A key design goal of `csv_sql` is that the core executor **does not need to print**.
+A key design goal of `fsql` is that the core executor **does not need to print**.
 You can inspect `ExecutionResult` directly.
 
 ```cpp
-sql::Tokenizer tokenizer("SELECT title FROM todos WHERE done = false;");
-sql::Parser parser(tokenizer.tokenize());
+fsql::Tokenizer tokenizer("SELECT title FROM todos WHERE done = false;");
+fsql::Parser parser(tokenizer.tokenize());
 const auto result = executor.execute(parser.parse_statement());
 
 if (!result.success)
@@ -372,7 +372,7 @@ if (!result.success)
 if (result.table.has_value())
 {
     const auto& table = *result.table;
-    coro->drive_rows(table.rows(), [](const sql::Row& row)
+    coro->drive_rows(table.rows(), [](const fsql::Row& row)
     {
         std::cout << row[0] << '\n';
         return true;
@@ -401,7 +401,7 @@ Use `CsvStorage` when:
 You can root `CsvStorage` in any directory:
 
 ```cpp
-auto storage = std::make_shared<sql::CsvStorage>("/path/to/data");
+auto storage = std::make_shared<fsql::CsvStorage>("/path/to/data");
 ```
 
 ### 5.6 Rendering human-readable output
@@ -946,17 +946,17 @@ The test suite includes an example of the latter pattern.
 ## 8. Project layout
 
 ```text
-core/   Core SQL engine: tokenizer, parser, executor, storage, streaming
-sql/    Command-line application and wrapper support
-tests/  Automated tests
+fsqllib/   Core SQL engine: tokenizer, parser, executor, storage, streaming
+fsql/      Command-line application and wrapper support
+fsqltests/ Automated tests
 ```
 
 More specifically:
 
-- `core/include/` contains public headers
-- `core/src/` contains the engine implementation
-- `sql/src/` contains CLI input/help/application logic
-- `tests/` contains grouped doctest suites for parser, executor, and storage behavior
+- `fsqllib/include/` contains public headers
+- `fsqllib/src/` contains the engine implementation
+- `fsql/src/` contains CLI input/help/application logic
+- `fsqltests/` contains grouped doctest suites for parser, executor, and storage behavior
 
 ---
 
@@ -971,7 +971,7 @@ ctest --test-dir build --output-on-failure
 Or run the doctest binary directly:
 
 ```sh
-./build/tests/sql_tests
+./build/fsqltests/fsqltests
 ```
 
 ---
@@ -992,6 +992,6 @@ That file tracks both implemented features and explicitly planned follow-up work
 
 ---
 
-If you use `csv_sql` as a library, the most important takeaway is this:
+If you use `fsql` as a library, the most important takeaway is this:
 
 > the parser, executor, storage abstraction, streaming result model, and output formatting are intentionally decoupled, so you can embed only the parts you need.

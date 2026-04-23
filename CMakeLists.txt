@@ -3,11 +3,11 @@
 #
 cmake_minimum_required (VERSION 3.12...3.31)
 
-project ("sql")
+project ("fsql")
 
 enable_testing()
 
 # Include sub-projects.
-add_subdirectory (core)
-add_subdirectory ("sql")
-add_subdirectory (tests)
+add_subdirectory (fsqllib)
+add_subdirectory (fsql)
+add_subdirectory (fsqltests)
