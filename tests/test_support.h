@@ -4,6 +4,7 @@
 #include "Executor.h"
 #include "MemoryStorage.h"
 #include "Parser.h"
+#include "SerialCoroExecutor.h"
 #include "Tokenizer.h"
 
 #include <filesystem>
@@ -63,7 +64,14 @@ namespace sql_test
     };
 
 
-    inline const sql::ExecutionTable& require_table(const sql::ExecutionResult& result)
+    struct MaterializedExecutionTable
+    {
+        std::vector<std::string> column_names;
+        std::vector<sql::Row> rows;
+    };
+
+
+    inline MaterializedExecutionTable require_table(const sql::ExecutionResult& result)
     {
         if (!result.success)
         {
@@ -73,7 +81,16 @@ namespace sql_test
         {
             throw std::runtime_error("Expected result table to be present");
         }
-        return *result.table;
+
+        MaterializedExecutionTable table;
+        table.column_names = result.table->column_names;
+        const sql::SerialCoroExecutor coro_executor;
+        coro_executor.drive_rows(result.table->rows(), [&](const sql::Row& row)
+        {
+            table.rows.push_back(row);
+            return true;
+        });
+        return table;
     }
 
 }

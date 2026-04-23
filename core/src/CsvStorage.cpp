@@ -32,7 +32,7 @@ namespace sql
             return visible_name;
         }
 
-        Table load_table_from_stream(std::istream& input, const std::string& table_name)
+        Table describe_table_from_stream(std::istream& input, const std::string& table_name)
         {
             Table table;
             table.name = table_name;
@@ -49,6 +49,14 @@ namespace sql
                 fail("Table has no columns: " + table_name);
             }
 
+            return table;
+        }
+
+        Table load_table_from_stream(std::istream& input, const std::string& table_name)
+        {
+            Table table = describe_table_from_stream(input, table_name);
+
+            std::string line;
             while (std::getline(input, line))
             {
                 auto row = CsvStorage::parse_csv_line(line);
@@ -60,6 +68,30 @@ namespace sql
             }
 
             return table;
+        }
+
+        RowGenerator scan_table_from_stream(std::filesystem::path path,
+                                            std::string table_name,
+                                            std::string missing_message)
+        {
+            std::ifstream input(path);
+            if (!input)
+            {
+                fail(std::move(missing_message));
+            }
+
+            const auto table = describe_table_from_stream(input, table_name);
+
+            std::string line;
+            while (std::getline(input, line))
+            {
+                auto row = CsvStorage::parse_csv_line(line);
+                if (row.size() != table.columns.size())
+                {
+                    fail("Row column count mismatch in table: " + table_name);
+                }
+                co_yield row;
+            }
         }
     }
 
@@ -103,6 +135,23 @@ namespace sql
         return load_table_from_stream(input, table_name);
     }
 
+    Table CsvStorage::describe_table(const std::string& table_name) const
+    {
+        const auto path = table_path(table_name);
+        std::ifstream input(path);
+        if (!input)
+        {
+            fail("Table does not exist: " + table_name);
+        }
+
+        return describe_table_from_stream(input, table_name);
+    }
+
+    RowGenerator CsvStorage::scan_table(const std::string& table_name) const
+    {
+        return scan_table_from_stream(table_path(table_name), table_name, "Table does not exist: " + table_name);
+    }
+
     std::filesystem::path CsvStorage::resolve_table_source_path(std::filesystem::path path)
     {
         if (path.extension().empty())
@@ -126,6 +175,24 @@ namespace sql
         }
 
         return load_table_from_stream(input, path.stem().string());
+    }
+
+    Table CsvStorage::describe_table_from_path(std::filesystem::path path)
+    {
+        path = resolve_table_source_path(std::move(path));
+        std::ifstream input(path);
+        if (!input)
+        {
+            fail("Table file does not exist: " + path.string());
+        }
+
+        return describe_table_from_stream(input, path.stem().string());
+    }
+
+    RowGenerator CsvStorage::scan_table_from_path(std::filesystem::path path)
+    {
+        path = resolve_table_source_path(std::move(path));
+        return scan_table_from_stream(path, path.stem().string(), "Table file does not exist: " + path.string());
     }
 
     ViewDefinition CsvStorage::load_view(const std::string& view_name) const

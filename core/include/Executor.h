@@ -1,9 +1,12 @@
 #pragma once
 
 #include "CsvStorage.h"
+#include "CoroTypes.h"
+#include "ICoroExecutor.h"
 #include "IStorage.h"
 #include "SqlTypes.h"
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,8 +21,8 @@ namespace sql
         /// @brief Ordered result column names.
         std::vector<std::string> column_names;
 
-        /// @brief Result rows.
-        std::vector<Row> rows;
+        /// @brief Reopenable row stream for the result.
+        std::function<RowGenerator()> rows;
     };
 
     /// @brief Supported structured executor result kinds.
@@ -63,7 +66,8 @@ namespace sql
     public:
         /// @brief Initializes the executor.
         /// @param storage Storage backend.
-        explicit Executor(std::shared_ptr<IStorage> storage);
+        /// @param coro_executor Coroutine executor used to drive streamed result consumption.
+        explicit Executor(std::shared_ptr<IStorage> storage, std::shared_ptr<ICoroExecutor> coro_executor = nullptr);
 
         /// @brief Executes a parsed statement.
         /// @param statement Statement to execute.
@@ -94,5 +98,8 @@ namespace sql
 
         /// @brief Storage backend.
         std::shared_ptr<IStorage> storage_;
+
+        /// @brief Coroutine executor used to drive streamed top-level result consumption.
+        std::shared_ptr<ICoroExecutor> coro_executor_;
     };
 }

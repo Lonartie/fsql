@@ -55,6 +55,27 @@ namespace sql
         return it->second;
     }
 
+    Table MemoryStorage::describe_table(const std::string& table_name) const
+    {
+        auto table = load_table(table_name);
+        table.rows.clear();
+        return table;
+    }
+
+    RowGenerator MemoryStorage::scan_table(const std::string& table_name) const
+    {
+        const auto it = tables_.find(table_name);
+        if (it == tables_.end())
+        {
+            fail("Table does not exist: " + table_name);
+        }
+
+        for (const auto& row : it->second.rows)
+        {
+            co_yield row;
+        }
+    }
+
     ViewDefinition MemoryStorage::load_view(const std::string& view_name) const
     {
         const auto it = views_.find(view_name);

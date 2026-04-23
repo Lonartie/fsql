@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CoroTypes.h"
 #include "SqlTypes.h"
 
 #include <cstddef>
@@ -34,6 +35,16 @@ namespace sql
         /// @param table_name Logical table name.
         /// @return Loaded table.
         virtual Table load_table(const std::string& table_name) const = 0;
+
+        /// @brief Loads table metadata without materializing table rows.
+        /// @param table_name Logical table name.
+        /// @return Table metadata containing the logical name and columns.
+        virtual Table describe_table(const std::string& table_name) const = 0;
+
+        /// @brief Streams table rows from storage.
+        /// @param table_name Logical table name.
+        /// @return Reopenable row stream for the table contents.
+        virtual RowGenerator scan_table(const std::string& table_name) const = 0;
 
         /// @brief Loads a view definition from storage.
         /// @param view_name Logical view name.

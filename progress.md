@@ -7,12 +7,6 @@
   - Table aliases in FROM and JOIN clauses
   - Complex join conditions with AND/OR
 - UNION, UNION ALL, INTERSECT, EXCEPT
-- Use coroutines for processing large datasets and streaming results instead of loading everything into memory at once
-  - Use nested fork/join model for loading/processing/outputting data 
-  - Write coroutine classes that yield rows / values one at a time
-  - Write an ICoroExecutor interface as an engine that runs the coroutines
-    - Write a SerialCoroExecutor that runs coroutines serially for simple cases
-    - Write a ParallelCoroExecutor that runs tasks in parallel if they are independent
 - Further NULL semantics alignment beyond the basic literal/predicate support
 - Further align operator semantics with SQL standard beyond the implemented keyword operators
   - Standardize remaining non-SQL operators / aliases and edge-case semantics
@@ -57,6 +51,17 @@
 - File paths as SELECT sources:
   - Quoted file path sources in `FROM`
   - Optional `.csv` file extension when resolving paths
+- Coroutine-based streamed query execution:
+  - Coroutine classes yield rows / values one at a time
+  - `IStorage::scan_table(...)` streams rows instead of loading full tables for streamable paths
+  - `ICoroExecutor` drives coroutine streams as the shared execution engine
+  - `SerialCoroExecutor` runs streamed row / value pipelines serially
+  - `ForkJoinScheduler` provides ordered nested fork/join scheduling for independent stages
+  - `ParallelCoroExecutor` overlaps independent loading/processing stages while preserving ordered serial callbacks
+  - Top-level `SELECT` source planning can materialize independent base table / file-path sources in parallel
+  - Scalar and predicate subqueries (`SELECT`, `EXISTS`, `IN`, `ANY`, `ALL`) consume streamed value / row generators with early stop
+  - Console output consumes streamed result rows through the coroutine executor
+  - Buffering is kept only where query semantics require reshaping/materialization (e.g. `ORDER BY`, `DISTINCT`, grouped aggregation, derived buffered subqueries)
 - Predicate subqueries in expressions:
   - EXISTS (SELECT ...)
   - IN (SELECT ...)

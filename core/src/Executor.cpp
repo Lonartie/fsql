@@ -1,6 +1,9 @@
 #include "Executor.h"
 
+#include "ForkJoinScheduler.h"
 #include "Parser.h"
+#include "ParallelCoroExecutor.h"
+#include "SerialCoroExecutor.h"
 #include "SqlError.h"
 #include "StringUtils.h"
 #include "Tokenizer.h"
@@ -43,16 +46,41 @@ namespace sql
             return is_stored_null(value) ? "NULL" : value;
         }
 
-        ExecutionTable make_visible_execution_table(ExecutionTable table)
+        RowGenerator open_visible_rows(std::function<RowGenerator()> open_rows)
         {
-            for (auto& row : table.rows)
+            for (auto row : open_rows())
             {
                 for (auto& value : row)
                 {
                     value = visible_value_text(value);
                 }
+                co_yield row;
             }
+        }
+
+        ExecutionTable make_visible_execution_table(ExecutionTable table)
+        {
+            const auto open_rows = table.rows;
+            table.rows = [open_rows]()
+            {
+                return open_visible_rows(open_rows);
+            };
             return table;
+        }
+
+        const ICoroExecutor& default_coro_executor()
+        {
+            static const SerialCoroExecutor executor;
+            return executor;
+        }
+
+        std::size_t count_execution_rows(const ExecutionTable& table, const ICoroExecutor& coro_executor)
+        {
+            return coro_executor.drive_rows(table.rows(), [](const Row& row)
+            {
+                static_cast<void>(row);
+                return true;
+            });
         }
 
         ExecutionResult make_success_result(ExecutionResultKind kind,
@@ -75,12 +103,6 @@ namespace sql
             std::vector<EvaluatedValue> order_values;
         };
 
-        struct SelectGroup
-        {
-            const Row* representative = nullptr;
-            std::vector<const Row*> rows;
-        };
-
         struct ResolvedSelectColumn
         {
             std::string source_name;
@@ -90,15 +112,31 @@ namespace sql
         struct ResolvedSelectTable
         {
             std::vector<ResolvedSelectColumn> columns;
-            std::vector<Row> rows;
+            std::function<RowGenerator()> rows;
             std::size_t source_count = 0;
         };
 
-        struct MaterializedSelectSource
+        struct SelectSourcePlan
         {
             std::string source_name;
             std::vector<std::string> column_names;
-            std::vector<Row> rows;
+            std::function<RowGenerator()> rows;
+        };
+
+        struct AggregateFunctionState
+        {
+            ExpressionPtr expression;
+            std::size_t count = 0;
+            double total = 0.0;
+            std::size_t numeric_count = 0;
+            EvaluatedValue best;
+            bool has_best = false;
+        };
+
+        struct SelectGroupState
+        {
+            Row representative_row;
+            std::map<std::string, AggregateFunctionState> aggregates;
         };
 
         struct ParsedColumnMetadata
@@ -388,13 +426,20 @@ namespace sql
 
         EvaluatedValue evaluate_in_subquery(const EvaluatedValue& left, const ExpressionPtr& right, const IStorage& storage);
 
+        EvaluatedValue evaluate_select_row_expression(const ExpressionPtr& expression,
+                                                     const ResolvedSelectTable& table,
+                                                     const Row& row,
+                                                     const IStorage& storage);
+
         EvaluatedValue evaluate_quantified_subquery(const EvaluatedValue& left,
                                                     BinaryOperator op,
                                                     SubqueryQuantifier quantifier,
                                                     const ExpressionPtr& right,
                                                     const IStorage& storage);
 
-        ExecutionTable run_select_statement(const SelectStatement& stmt, const IStorage& storage);
+        double require_numeric_argument(const EvaluatedValue& value, const std::string& function_name);
+
+        ExecutionTable run_select_statement(const SelectStatement& stmt, const IStorage& storage, const ForkJoinScheduler* scheduler = nullptr);
 
         thread_local std::vector<std::string> active_view_stack;
 
@@ -467,9 +512,14 @@ namespace sql
             return run_select_statement(parse_view_statement(storage.load_view(view_name)), storage);
         }
 
-        void validate_view_definition(const std::string& view_name, const IStorage& storage)
+        void validate_view_definition(const std::string& view_name, const IStorage& storage, const ICoroExecutor& coro_executor)
         {
-            static_cast<void>(run_view_statement(view_name, storage));
+            const auto result = run_view_statement(view_name, storage);
+            coro_executor.drive_rows(result.rows(), [](const Row& row)
+            {
+                static_cast<void>(row);
+                return true;
+            });
         }
 
         std::string serialize_select_source(const SelectSource& source)
@@ -972,10 +1022,12 @@ namespace sql
 
             if (stmt.distinct)
             {
-                rows.erase(std::unique(rows.begin(), rows.end(), [](const ProjectedSelectRow& left, const ProjectedSelectRow& right)
+                std::set<Row> seen_rows;
+                auto unique_begin = std::remove_if(rows.begin(), rows.end(), [&](const ProjectedSelectRow& row)
                 {
-                    return left.values == right.values;
-                }), rows.end());
+                    return !seen_rows.insert(row.values).second;
+                });
+                rows.erase(unique_begin, rows.end());
             }
 
             const std::size_t offset = stmt.offset.value_or(0);
@@ -993,6 +1045,284 @@ namespace sql
             {
                 rows.erase(rows.begin() + static_cast<std::ptrdiff_t>(*stmt.limit), rows.end());
             }
+        }
+
+        RowGenerator open_materialized_rows(std::shared_ptr<const std::vector<Row>> rows)
+        {
+            for (const auto& row : *rows)
+            {
+                co_yield row;
+            }
+        }
+
+        ExecutionTable make_buffered_execution_table(std::vector<std::string> column_names, std::vector<ProjectedSelectRow> projected_rows)
+        {
+            auto rows = std::make_shared<std::vector<Row>>();
+            rows->reserve(projected_rows.size());
+            for (auto& projected_row : projected_rows)
+            {
+                rows->push_back(std::move(projected_row.values));
+            }
+
+            ExecutionTable result;
+            result.column_names = std::move(column_names);
+            result.rows = [rows]()
+            {
+                return open_materialized_rows(rows);
+            };
+            return result;
+        }
+
+        RowGenerator open_joined_rows(std::shared_ptr<const std::vector<SelectSourcePlan>> sources, std::size_t index, Row prefix)
+        {
+            if (index >= sources->size())
+            {
+                co_yield prefix;
+                co_return;
+            }
+
+            for (const auto& source_row : (*sources)[index].rows())
+            {
+                Row combined_row = prefix;
+                combined_row.insert(combined_row.end(), source_row.begin(), source_row.end());
+                for (auto row : open_joined_rows(sources, index + 1, std::move(combined_row)))
+                {
+                    co_yield row;
+                }
+            }
+        }
+
+        RowGenerator open_select_all_rows(ResolvedSelectTable table, SelectStatement stmt, const IStorage* storage)
+        {
+            const auto offset = stmt.offset.value_or(0);
+            const auto limit = stmt.limit.value_or(static_cast<std::size_t>(-1));
+            std::size_t skipped = 0;
+            std::size_t emitted = 0;
+
+            for (const auto& row : table.rows())
+            {
+                if (stmt.where && !to_bool(evaluate_select_row_expression(stmt.where, table, row, *storage)))
+                {
+                    continue;
+                }
+
+                if (skipped < offset)
+                {
+                    ++skipped;
+                    continue;
+                }
+
+                if (emitted >= limit)
+                {
+                    co_return;
+                }
+
+                co_yield row;
+                ++emitted;
+            }
+        }
+
+        RowGenerator open_projected_rows(ResolvedSelectTable table, SelectStatement stmt, const IStorage* storage)
+        {
+            const auto offset = stmt.offset.value_or(0);
+            const auto limit = stmt.limit.value_or(static_cast<std::size_t>(-1));
+            std::size_t skipped = 0;
+            std::size_t emitted = 0;
+
+            for (const auto& row : table.rows())
+            {
+                if (stmt.where && !to_bool(evaluate_select_row_expression(stmt.where, table, row, *storage)))
+                {
+                    continue;
+                }
+
+                if (skipped < offset)
+                {
+                    ++skipped;
+                    continue;
+                }
+
+                if (emitted >= limit)
+                {
+                    co_return;
+                }
+
+                Row projected_row;
+                projected_row.reserve(stmt.projections.size());
+                for (const auto& projection : stmt.projections)
+                {
+                    projected_row.push_back(evaluate_select_row_expression(projection, table, row, *storage).text);
+                }
+
+                co_yield projected_row;
+                ++emitted;
+            }
+        }
+
+        ValueGenerator open_execution_values(const ExecutionTable& table)
+        {
+            for (const auto& row : table.rows())
+            {
+                if (row.empty())
+                {
+                    fail("SELECT expression row is missing projected value");
+                }
+                co_yield row[0];
+            }
+        }
+
+        void update_aggregate_function(AggregateFunctionState& state, const ResolvedSelectTable& table, const Row& row, const IStorage& storage)
+        {
+            if (!state.expression || state.expression->kind != ExpressionKind::FunctionCall || !is_aggregate_function_name(state.expression->text))
+            {
+                fail("Invalid aggregate projection");
+            }
+
+            if (iequals(state.expression->text, "COUNT"))
+            {
+                if (state.expression->function_uses_star)
+                {
+                    if (!state.expression->arguments.empty())
+                    {
+                        fail("COUNT(*) does not accept additional arguments");
+                    }
+                    ++state.count;
+                    return;
+                }
+
+                if (state.expression->arguments.size() != 1)
+                {
+                    fail("COUNT requires exactly one argument or *");
+                }
+
+                const auto value = evaluate_select_row_expression(state.expression->arguments[0], table, row, storage);
+                if (!value.is_null && !value.text.empty())
+                {
+                    ++state.count;
+                }
+                return;
+            }
+
+            if (state.expression->function_uses_star)
+            {
+                fail("Only COUNT supports '*' as an argument");
+            }
+            if (state.expression->arguments.size() != 1)
+            {
+                fail("Aggregate function " + state.expression->text + " requires exactly one argument");
+            }
+
+            const auto value = evaluate_select_row_expression(state.expression->arguments[0], table, row, storage);
+            if (value.is_null || value.text.empty())
+            {
+                return;
+            }
+
+            if (iequals(state.expression->text, "SUM") || iequals(state.expression->text, "AVG"))
+            {
+                state.total += require_numeric_argument(value, state.expression->text);
+                ++state.numeric_count;
+                return;
+            }
+
+            if (!state.has_best)
+            {
+                state.best = value;
+                state.has_best = true;
+                return;
+            }
+
+            const bool prefer_numeric = value.numeric && state.best.numeric;
+            const bool should_replace = iequals(state.expression->text, "MIN")
+                ? (prefer_numeric ? value.number < state.best.number : value.text < state.best.text)
+                : (prefer_numeric ? value.number > state.best.number : value.text > state.best.text);
+            if (should_replace)
+            {
+                state.best = value;
+            }
+        }
+
+        EvaluatedValue finalize_aggregate_function(const AggregateFunctionState& state)
+        {
+            if (!state.expression)
+            {
+                fail("Missing aggregate state");
+            }
+
+            if (iequals(state.expression->text, "COUNT"))
+            {
+                return make_numeric(static_cast<double>(state.count));
+            }
+            if (iequals(state.expression->text, "SUM"))
+            {
+                return make_numeric(state.total);
+            }
+            if (iequals(state.expression->text, "AVG"))
+            {
+                return make_numeric(state.numeric_count == 0 ? 0.0 : (state.total / static_cast<double>(state.numeric_count)));
+            }
+            return state.has_best ? make_text(state.best.text) : make_text("");
+        }
+
+        void collect_aggregate_definitions_from_expression(const ExpressionPtr& expression, std::map<std::string, ExpressionPtr>& definitions)
+        {
+            if (!expression)
+            {
+                return;
+            }
+
+            switch (expression->kind)
+            {
+            case ExpressionKind::FunctionCall:
+                if (is_aggregate_function_name(expression->text))
+                {
+                    definitions.emplace(serialize_expression(expression), expression);
+                    return;
+                }
+                for (const auto& argument : expression->arguments)
+                {
+                    collect_aggregate_definitions_from_expression(argument, definitions);
+                }
+                return;
+            case ExpressionKind::Unary:
+                collect_aggregate_definitions_from_expression(expression->left, definitions);
+                return;
+            case ExpressionKind::Binary:
+                collect_aggregate_definitions_from_expression(expression->left, definitions);
+                collect_aggregate_definitions_from_expression(expression->right, definitions);
+                return;
+            case ExpressionKind::Literal:
+            case ExpressionKind::Null:
+            case ExpressionKind::Identifier:
+            case ExpressionKind::Select:
+            case ExpressionKind::Exists:
+                return;
+            }
+        }
+
+        std::map<std::string, ExpressionPtr> collect_aggregate_definitions(const SelectStatement& stmt)
+        {
+            std::map<std::string, ExpressionPtr> definitions;
+            for (const auto& projection : stmt.projections)
+            {
+                collect_aggregate_definitions_from_expression(projection, definitions);
+            }
+            for (const auto& order_by : stmt.order_by)
+            {
+                collect_aggregate_definitions_from_expression(order_by.expression, definitions);
+            }
+            collect_aggregate_definitions_from_expression(stmt.having, definitions);
+            return definitions;
+        }
+
+        std::map<std::string, AggregateFunctionState> make_aggregate_state_map(const std::map<std::string, ExpressionPtr>& definitions)
+        {
+            std::map<std::string, AggregateFunctionState> states;
+            for (const auto& [key, expression] : definitions)
+            {
+                states.emplace(key, AggregateFunctionState{expression});
+            }
+            return states;
         }
 
         std::size_t resolve_select_column_index(const ResolvedSelectTable& table, const std::string& identifier)
@@ -1091,19 +1421,22 @@ namespace sql
             return source.name;
         }
 
-        MaterializedSelectSource materialize_select_source(const SelectSource& source, const IStorage& storage)
+        SelectSourcePlan materialize_select_source(const SelectSource& source, const IStorage& storage)
         {
-            MaterializedSelectSource materialized;
+            SelectSourcePlan materialized;
             if (source.kind == SelectSource::Kind::FilePath)
             {
-                const auto table = CsvStorage::load_table_from_path(source.name);
+                const auto table = CsvStorage::describe_table_from_path(source.name);
                 materialized.source_name = source.alias.value_or(default_select_source_name(source));
                 materialized.column_names.reserve(table.columns.size());
                 for (const auto& column : table.columns)
                 {
                     materialized.column_names.push_back(visible_column_name(column));
                 }
-                materialized.rows = table.rows;
+                materialized.rows = [path = source.name]()
+                {
+                    return CsvStorage::scan_table_from_path(path);
+                };
                 return materialized;
             }
 
@@ -1125,13 +1458,16 @@ namespace sql
                     return materialized;
                 }
 
-                const Table table = storage.load_table(source.name);
+                const Table table = storage.describe_table(source.name);
                 materialized.column_names.reserve(table.columns.size());
                 for (const auto& column : table.columns)
                 {
                     materialized.column_names.push_back(visible_column_name(column));
                 }
-                materialized.rows = table.rows;
+                materialized.rows = [storage_ptr = &storage, table_name = source.name]()
+                {
+                    return storage_ptr->scan_table(table_name);
+                };
                 return materialized;
             }
 
@@ -1151,26 +1487,61 @@ namespace sql
             return materialized;
         }
 
-        ResolvedSelectTable materialize_select_table(const SelectStatement& stmt, const IStorage& storage)
+        bool can_parallelize_select_source_materialization(const SelectSource& source, const IStorage& storage)
+        {
+            if (source.kind == SelectSource::Kind::FilePath)
+            {
+                return true;
+            }
+            if (source.kind != SelectSource::Kind::Table)
+            {
+                return false;
+            }
+            return !storage.has_view(source.name);
+        }
+
+        ResolvedSelectTable materialize_select_table(const SelectStatement& stmt, const IStorage& storage, const ForkJoinScheduler* scheduler)
         {
             if (stmt.sources.empty())
             {
                 fail("SELECT requires at least one source");
             }
 
-            std::vector<MaterializedSelectSource> sources;
-            sources.reserve(stmt.sources.size());
-            for (const auto& source : stmt.sources)
+            std::vector<SelectSourcePlan> sources;
+            if (scheduler != nullptr && stmt.sources.size() > 1 && std::all_of(stmt.sources.begin(), stmt.sources.end(), [&](const SelectSource& source)
             {
-                auto materialized = materialize_select_source(source, storage);
-                for (const auto& existing : sources)
+                return can_parallelize_select_source_materialization(source, storage);
+            }))
+            {
+                std::vector<std::function<SelectSourcePlan()>> tasks;
+                tasks.reserve(stmt.sources.size());
+                for (const auto& source : stmt.sources)
                 {
-                    if (iequals(existing.source_name, materialized.source_name))
+                    tasks.push_back([source, storage_ptr = &storage]()
                     {
-                        fail("Duplicate SELECT source name '" + materialized.source_name + "'");
+                        return materialize_select_source(source, *storage_ptr);
+                    });
+                }
+                sources = scheduler->fork_join(tasks);
+            }
+            else
+            {
+                sources.reserve(stmt.sources.size());
+                for (const auto& source : stmt.sources)
+                {
+                    sources.push_back(materialize_select_source(source, storage));
+                }
+            }
+
+            for (std::size_t i = 0; i < sources.size(); ++i)
+            {
+                for (std::size_t j = i + 1; j < sources.size(); ++j)
+                {
+                    if (iequals(sources[i].source_name, sources[j].source_name))
+                    {
+                        fail("Duplicate SELECT source name '" + sources[j].source_name + "'");
                     }
                 }
-                sources.push_back(std::move(materialized));
             }
 
             ResolvedSelectTable resolved;
@@ -1183,28 +1554,11 @@ namespace sql
                 }
             }
 
-            resolved.rows.push_back({});
-            for (const auto& source : sources)
+            auto shared_sources = std::make_shared<std::vector<SelectSourcePlan>>(std::move(sources));
+            resolved.rows = [shared_sources]()
             {
-                if (source.rows.empty())
-                {
-                    resolved.rows.clear();
-                    break;
-                }
-
-                std::vector<Row> next_rows;
-                next_rows.reserve(resolved.rows.size() * source.rows.size());
-                for (const auto& prefix : resolved.rows)
-                {
-                    for (const auto& source_row : source.rows)
-                    {
-                        Row row = prefix;
-                        row.insert(row.end(), source_row.begin(), source_row.end());
-                        next_rows.push_back(std::move(row));
-                    }
-                }
-                resolved.rows = std::move(next_rows);
-            }
+                return open_joined_rows(shared_sources, 0, {});
+            };
 
             return resolved;
         }
@@ -1361,21 +1715,6 @@ namespace sql
             fail("Unsupported select expression");
         }
 
-        std::vector<const Row*> filter_rows(const ResolvedSelectTable& table, const ExpressionPtr& where, const IStorage& storage)
-        {
-            std::vector<const Row*> rows;
-            rows.reserve(table.rows.size());
-            for (const auto& row : table.rows)
-            {
-                if (where && !to_bool(evaluate_select_row_expression(where, table, row, storage)))
-                {
-                    continue;
-                }
-                rows.push_back(&row);
-            }
-            return rows;
-        }
-
         double require_numeric_argument(const EvaluatedValue& value, const std::string& function_name)
         {
             if (value.numeric)
@@ -1392,106 +1731,9 @@ namespace sql
             fail("Aggregate function " + function_name + " requires numeric values");
         }
 
-        EvaluatedValue evaluate_aggregate_function(const ExpressionPtr& expression, const ResolvedSelectTable& table, const std::vector<const Row*>& rows, const IStorage& storage)
-        {
-            if (!expression || expression->kind != ExpressionKind::FunctionCall || !is_aggregate_function_name(expression->text))
-            {
-                fail("Invalid aggregate projection");
-            }
-
-            if (iequals(expression->text, "COUNT"))
-            {
-                if (expression->function_uses_star)
-                {
-                    if (!expression->arguments.empty())
-                    {
-                        fail("COUNT(*) does not accept additional arguments");
-                    }
-                    return make_numeric(static_cast<double>(rows.size()));
-                }
-
-                if (expression->arguments.size() != 1)
-                {
-                    fail("COUNT requires exactly one argument or *");
-                }
-
-                std::size_t count = 0;
-                for (const auto* row : rows)
-                {
-                    const auto value = evaluate_select_row_expression(expression->arguments[0], table, *row, storage);
-                    if (!value.is_null && !value.text.empty())
-                    {
-                        ++count;
-                    }
-                }
-                return make_numeric(static_cast<double>(count));
-            }
-
-            if (expression->function_uses_star)
-            {
-                fail("Only COUNT supports '*' as an argument");
-            }
-            if (expression->arguments.size() != 1)
-            {
-                fail("Aggregate function " + expression->text + " requires exactly one argument");
-            }
-
-            if (iequals(expression->text, "SUM") || iequals(expression->text, "AVG"))
-            {
-                double total = 0.0;
-                std::size_t count = 0;
-                for (const auto* row : rows)
-                {
-                    const auto value = evaluate_select_row_expression(expression->arguments[0], table, *row, storage);
-                    if (value.is_null || value.text.empty())
-                    {
-                        continue;
-                    }
-                    total += require_numeric_argument(value, expression->text);
-                    ++count;
-                }
-
-                if (iequals(expression->text, "SUM"))
-                {
-                    return make_numeric(total);
-                }
-                return make_numeric(count == 0 ? 0.0 : (total / static_cast<double>(count)));
-            }
-
-            EvaluatedValue best;
-            bool has_best = false;
-            for (const auto* row : rows)
-            {
-                const auto value = evaluate_select_row_expression(expression->arguments[0], table, *row, storage);
-                if (value.is_null || value.text.empty())
-                {
-                    continue;
-                }
-
-                if (!has_best)
-                {
-                    best = value;
-                    has_best = true;
-                    continue;
-                }
-
-                const bool prefer_numeric = value.numeric && best.numeric;
-                const bool should_replace = iequals(expression->text, "MIN")
-                    ? (prefer_numeric ? value.number < best.number : value.text < best.text)
-                    : (prefer_numeric ? value.number > best.number : value.text > best.text);
-                if (should_replace)
-                {
-                    best = value;
-                }
-            }
-
-            return has_best ? make_text(best.text) : make_text("");
-        }
-
         EvaluatedValue evaluate_grouped_expression(const ExpressionPtr& expression,
                                                    const ResolvedSelectTable& table,
-                                                   const Row& representative_row,
-                                                   const std::vector<const Row*>& rows,
+                                                   const SelectGroupState& group,
                                                    const IStorage& storage)
         {
             if (!expression)
@@ -1506,7 +1748,7 @@ namespace sql
             case ExpressionKind::Null:
                 return make_null();
             case ExpressionKind::Identifier:
-                return evaluate_select_identifier(expression->text, table, representative_row);
+                return evaluate_select_identifier(expression->text, table, group.representative_row);
             case ExpressionKind::Select:
                 if (!expression->select)
                 {
@@ -1522,15 +1764,20 @@ namespace sql
             case ExpressionKind::FunctionCall:
                 if (is_aggregate_function_name(expression->text))
                 {
-                    return evaluate_aggregate_function(expression, table, rows, storage);
+                    const auto it = group.aggregates.find(serialize_expression(expression));
+                    if (it == group.aggregates.end())
+                    {
+                        fail("Missing aggregate state for expression " + serialize_expression(expression));
+                    }
+                    return finalize_aggregate_function(it->second);
                 }
                 return evaluate_function(*expression);
             case ExpressionKind::Unary:
-                return apply_unary_operator(expression->unary_operator, evaluate_grouped_expression(expression->left, table, representative_row, rows, storage));
+                return apply_unary_operator(expression->unary_operator, evaluate_grouped_expression(expression->left, table, group, storage));
             case ExpressionKind::Binary:
                 if (expression->subquery_quantifier != SubqueryQuantifier::None)
                 {
-                    return evaluate_quantified_subquery(evaluate_grouped_expression(expression->left, table, representative_row, rows, storage),
+                    return evaluate_quantified_subquery(evaluate_grouped_expression(expression->left, table, group, storage),
                                                         expression->binary_operator,
                                                         expression->subquery_quantifier,
                                                         expression->right,
@@ -1538,50 +1785,60 @@ namespace sql
                 }
                 if (expression->binary_operator == BinaryOperator::In)
                 {
-                    return evaluate_in_subquery(evaluate_grouped_expression(expression->left, table, representative_row, rows, storage), expression->right, storage);
+                    return evaluate_in_subquery(evaluate_grouped_expression(expression->left, table, group, storage), expression->right, storage);
                 }
                 return apply_binary_operator(expression->binary_operator,
-                                             evaluate_grouped_expression(expression->left, table, representative_row, rows, storage),
-                                             evaluate_grouped_expression(expression->right, table, representative_row, rows, storage));
+                                             evaluate_grouped_expression(expression->left, table, group, storage),
+                                             evaluate_grouped_expression(expression->right, table, group, storage));
             }
 
             fail("Unsupported grouped expression");
         }
 
-        std::vector<SelectGroup> build_select_groups(const SelectStatement& stmt,
-                                                     const ResolvedSelectTable& table,
-                                                     const std::vector<const Row*>& rows,
-                                                     const IStorage& storage)
+        std::vector<SelectGroupState> build_select_groups(const SelectStatement& stmt,
+                                                          const ResolvedSelectTable& table,
+                                                          const IStorage& storage,
+                                                          const std::map<std::string, ExpressionPtr>& aggregate_definitions)
         {
-            std::vector<SelectGroup> groups;
+            std::vector<SelectGroupState> groups;
             std::map<Row, std::size_t> key_to_group_index;
 
-            for (const auto* row : rows)
+            for (const auto& row : table.rows())
             {
+                if (stmt.where && !to_bool(evaluate_select_row_expression(stmt.where, table, row, storage)))
+                {
+                    continue;
+                }
+
                 Row key;
                 key.reserve(stmt.group_by.size());
                 for (const auto& expression : stmt.group_by)
                 {
-                    key.push_back(evaluate_select_row_expression(expression, table, *row, storage).text);
+                    key.push_back(evaluate_select_row_expression(expression, table, row, storage).text);
                 }
 
                 const auto [iterator, inserted] = key_to_group_index.emplace(key, groups.size());
                 if (inserted)
                 {
-                    SelectGroup group;
-                    group.representative = row;
+                    SelectGroupState group;
+                    group.representative_row = row;
+                    group.aggregates = make_aggregate_state_map(aggregate_definitions);
                     groups.push_back(std::move(group));
                 }
-                groups[iterator->second].rows.push_back(row);
+
+                for (auto& [aggregate_name, state] : groups[iterator->second].aggregates)
+                {
+                    static_cast<void>(aggregate_name);
+                    update_aggregate_function(state, table, row, storage);
+                }
             }
 
             return groups;
         }
 
-        ExecutionTable run_select_statement(const SelectStatement& stmt, const IStorage& storage)
+        ExecutionTable run_select_statement(const SelectStatement& stmt, const IStorage& storage, const ForkJoinScheduler* scheduler)
         {
-            const auto table = materialize_select_table(stmt, storage);
-            const auto rows = filter_rows(table, stmt.where, storage);
+            const auto table = materialize_select_table(stmt, storage, scheduler);
 
             if (stmt.having && stmt.group_by.empty())
             {
@@ -1613,13 +1870,14 @@ namespace sql
                     validate_grouped_expression(stmt.having, table, group_by_identifiers);
                 }
 
+                const auto aggregate_definitions = collect_aggregate_definitions(stmt);
                 std::vector<ProjectedSelectRow> projected_rows;
-                const auto groups = build_select_groups(stmt, table, rows, storage);
+                const auto groups = build_select_groups(stmt, table, storage, aggregate_definitions);
                 projected_rows.reserve(groups.size());
 
                 for (const auto& group : groups)
                 {
-                    if (stmt.having && !to_bool(evaluate_grouped_expression(stmt.having, table, *group.representative, group.rows, storage)))
+                    if (stmt.having && !to_bool(evaluate_grouped_expression(stmt.having, table, group, storage)))
                     {
                         continue;
                     }
@@ -1628,23 +1886,18 @@ namespace sql
                     projected_row.values.reserve(stmt.projections.size());
                     for (const auto& projection : stmt.projections)
                     {
-                        projected_row.values.push_back(evaluate_grouped_expression(projection, table, *group.representative, group.rows, storage).text);
+                        projected_row.values.push_back(evaluate_grouped_expression(projection, table, group, storage).text);
                     }
                     projected_row.order_values.reserve(stmt.order_by.size());
                     for (const auto& order_by : stmt.order_by)
                     {
-                        projected_row.order_values.push_back(evaluate_grouped_expression(order_by.expression, table, *group.representative, group.rows, storage));
+                        projected_row.order_values.push_back(evaluate_grouped_expression(order_by.expression, table, group, storage));
                     }
                     projected_rows.push_back(std::move(projected_row));
                 }
 
                 apply_select_modifiers(stmt, projected_rows);
-                result.rows.reserve(projected_rows.size());
-                for (auto& projected_row : projected_rows)
-                {
-                    result.rows.push_back(std::move(projected_row.values));
-                }
-                return result;
+                return make_buffered_execution_table(std::move(result.column_names), std::move(projected_rows));
             }
 
             for (const auto& order_by : stmt.order_by)
@@ -1653,7 +1906,6 @@ namespace sql
             }
 
             std::vector<ProjectedSelectRow> projected_rows;
-            projected_rows.reserve(rows.size());
 
             if (stmt.select_all)
             {
@@ -1663,25 +1915,35 @@ namespace sql
                     result.column_names.push_back(select_star_column_name(table, i));
                 }
 
-                for (const auto* row : rows)
+                if (stmt.order_by.empty() && !stmt.distinct)
                 {
+                    result.rows = [table, stmt, storage_ptr = &storage]()
+                    {
+                        return open_select_all_rows(table, stmt, storage_ptr);
+                    };
+                    return result;
+                }
+
+                std::vector<ProjectedSelectRow> projected_rows;
+                for (const auto& row : table.rows())
+                {
+                    if (stmt.where && !to_bool(evaluate_select_row_expression(stmt.where, table, row, storage)))
+                    {
+                        continue;
+                    }
+
                     ProjectedSelectRow projected_row;
-                    projected_row.values = *row;
+                    projected_row.values = row;
                     projected_row.order_values.reserve(stmt.order_by.size());
                     for (const auto& order_by : stmt.order_by)
                     {
-                        projected_row.order_values.push_back(evaluate_select_row_expression(order_by.expression, table, *row, storage));
+                        projected_row.order_values.push_back(evaluate_select_row_expression(order_by.expression, table, row, storage));
                     }
                     projected_rows.push_back(std::move(projected_row));
                 }
 
                 apply_select_modifiers(stmt, projected_rows);
-                result.rows.reserve(projected_rows.size());
-                for (auto& projected_row : projected_rows)
-                {
-                    result.rows.push_back(std::move(projected_row.values));
-                }
-                return result;
+                return make_buffered_execution_table(std::move(result.column_names), std::move(projected_rows));
             }
 
             ExecutionTable result;
@@ -1695,6 +1957,22 @@ namespace sql
 
             if (has_aggregate_projection)
             {
+                const auto aggregate_definitions = collect_aggregate_definitions(stmt);
+                auto aggregate_states = make_aggregate_state_map(aggregate_definitions);
+                for (const auto& row : table.rows())
+                {
+                    if (stmt.where && !to_bool(evaluate_select_row_expression(stmt.where, table, row, storage)))
+                    {
+                        continue;
+                    }
+
+                    for (auto& [aggregate_name, state] : aggregate_states)
+                    {
+                        static_cast<void>(aggregate_name);
+                        update_aggregate_function(state, table, row, storage);
+                    }
+                }
+
                 ProjectedSelectRow aggregate_row;
                 aggregate_row.values.reserve(stmt.projections.size());
                 for (const auto& projection : stmt.projections)
@@ -1703,42 +1981,50 @@ namespace sql
                     {
                         fail("Aggregate queries only support aggregate functions in SELECT projections");
                     }
-                    aggregate_row.values.push_back(evaluate_aggregate_function(projection, table, rows, storage).text);
+                    const auto state = aggregate_states.find(serialize_expression(projection));
+                    if (state == aggregate_states.end())
+                    {
+                        fail("Missing aggregate state for expression " + serialize_expression(projection));
+                    }
+                    aggregate_row.values.push_back(finalize_aggregate_function(state->second).text);
                 }
                 projected_rows.push_back(std::move(aggregate_row));
                 apply_select_modifiers(stmt, projected_rows);
-                result.rows.reserve(projected_rows.size());
-                for (auto& projected_row : projected_rows)
+                return make_buffered_execution_table(std::move(result.column_names), std::move(projected_rows));
+            }
+
+            if (stmt.order_by.empty() && !stmt.distinct)
+            {
+                result.rows = [table, stmt, storage_ptr = &storage]()
                 {
-                    result.rows.push_back(std::move(projected_row.values));
-                }
+                    return open_projected_rows(table, stmt, storage_ptr);
+                };
                 return result;
             }
 
-            for (const auto* row : rows)
+            for (const auto& row : table.rows())
             {
+                if (stmt.where && !to_bool(evaluate_select_row_expression(stmt.where, table, row, storage)))
+                {
+                    continue;
+                }
+
                 ProjectedSelectRow projected_row;
                 projected_row.values.reserve(stmt.projections.size());
                 for (const auto& projection : stmt.projections)
                 {
-                    projected_row.values.push_back(evaluate_select_row_expression(projection, table, *row, storage).text);
+                    projected_row.values.push_back(evaluate_select_row_expression(projection, table, row, storage).text);
                 }
                 projected_row.order_values.reserve(stmt.order_by.size());
                 for (const auto& order_by : stmt.order_by)
                 {
-                    projected_row.order_values.push_back(evaluate_select_row_expression(order_by.expression, table, *row, storage));
+                    projected_row.order_values.push_back(evaluate_select_row_expression(order_by.expression, table, row, storage));
                 }
                 projected_rows.push_back(std::move(projected_row));
             }
 
             apply_select_modifiers(stmt, projected_rows);
-            result.rows.reserve(projected_rows.size());
-            for (auto& projected_row : projected_rows)
-            {
-                result.rows.push_back(std::move(projected_row.values));
-            }
-
-            return result;
+            return make_buffered_execution_table(std::move(result.column_names), std::move(projected_rows));
         }
 
         EvaluatedValue evaluate_select_expression(const SelectStatement& stmt, const IStorage& storage)
@@ -1748,21 +2034,41 @@ namespace sql
             {
                 fail("SELECT expression must return exactly one column");
             }
-            if (result.rows.empty())
+
+            std::optional<std::string> first_value;
+            bool saw_multiple_rows = false;
+            default_coro_executor().drive_values(open_execution_values(result), [&](const std::string& value)
+            {
+                if (!first_value.has_value())
+                {
+                    first_value = value;
+                    return true;
+                }
+
+                saw_multiple_rows = true;
+                return false;
+            });
+
+            if (!first_value.has_value())
             {
                 fail("SELECT expression returned no rows");
             }
-            if (result.rows.size() != 1)
+            if (saw_multiple_rows)
             {
                 fail("SELECT expression returned more than one row");
             }
-            return make_text(result.rows[0][0]);
+
+            return make_text(*first_value);
         }
 
         bool evaluate_exists_expression(const SelectStatement& stmt, const IStorage& storage)
         {
             const auto result = run_select_statement(stmt, storage);
-            return !result.rows.empty();
+            return default_coro_executor().drive_rows(result.rows(), [](const Row& row)
+            {
+                static_cast<void>(row);
+                return false;
+            }) > 0;
         }
 
         EvaluatedValue evaluate_in_subquery(const EvaluatedValue& left, const ExpressionPtr& right, const IStorage& storage)
@@ -1783,24 +2089,23 @@ namespace sql
                 return make_numeric(0.0);
             }
 
-            for (const auto& row : result.rows)
+            bool found_match = false;
+            default_coro_executor().drive_values(open_execution_values(result), [&](const std::string& value)
             {
-                if (row.empty())
-                {
-                    continue;
-                }
-                const auto candidate = make_text(row[0]);
+                const auto candidate = make_text(value);
                 if (candidate.is_null)
                 {
-                    continue;
+                    return true;
                 }
                 if (compare_values(left, candidate) == 0)
                 {
-                    return make_numeric(1.0);
+                    found_match = true;
+                    return false;
                 }
-            }
+                return true;
+            });
 
-            return make_numeric(0.0);
+            return make_numeric(found_match ? 1.0 : 0.0);
         }
 
         EvaluatedValue evaluate_quantified_subquery(const EvaluatedValue& left,
@@ -1831,43 +2136,41 @@ namespace sql
 
             if (quantifier == SubqueryQuantifier::Any)
             {
-                for (const auto& row : result.rows)
+                bool matched = false;
+                default_coro_executor().drive_values(open_execution_values(result), [&](const std::string& value)
                 {
-                    if (row.empty())
-                    {
-                        continue;
-                    }
-                    const auto candidate = make_text(row[0]);
+                    const auto candidate = make_text(value);
                     if (candidate.is_null)
                     {
-                        continue;
+                        return true;
                     }
                     if (evaluate_quantified_comparison(compare_values(left, candidate), op))
                     {
-                        return make_numeric(1.0);
+                        matched = true;
+                        return false;
                     }
-                }
-                return make_numeric(0.0);
+                    return true;
+                });
+                return make_numeric(matched ? 1.0 : 0.0);
             }
 
-            for (const auto& row : result.rows)
+            bool all_match = true;
+            default_coro_executor().drive_values(open_execution_values(result), [&](const std::string& value)
             {
-                if (row.empty())
-                {
-                    continue;
-                }
-                const auto candidate = make_text(row[0]);
+                const auto candidate = make_text(value);
                 if (candidate.is_null)
                 {
-                    continue;
+                    return true;
                 }
                 if (!evaluate_quantified_comparison(compare_values(left, candidate), op))
                 {
-                    return make_numeric(0.0);
+                    all_match = false;
+                    return false;
                 }
-            }
+                return true;
+            });
 
-            return make_numeric(1.0);
+            return make_numeric(all_match ? 1.0 : 0.0);
         }
 
         EvaluatedValue evaluate_expression(const ExpressionPtr& expression, const Table& table, const Row& row, const IStorage& storage)
@@ -1945,12 +2248,17 @@ namespace sql
         }
     }
 
-    Executor::Executor(std::shared_ptr<IStorage> storage)
-        : storage_(std::move(storage))
+    Executor::Executor(std::shared_ptr<IStorage> storage, std::shared_ptr<ICoroExecutor> coro_executor)
+        : storage_(std::move(storage)),
+          coro_executor_(std::move(coro_executor))
     {
         if (!storage_)
         {
             fail("Storage backend must not be null");
+        }
+        if (!coro_executor_)
+        {
+            coro_executor_ = std::make_shared<SerialCoroExecutor>();
         }
     }
 
@@ -2023,7 +2331,7 @@ namespace sql
 
             try
             {
-                validate_view_definition(stmt.table_name, *storage_);
+                validate_view_definition(stmt.table_name, *storage_, *coro_executor_);
             }
             catch (...)
             {
@@ -2202,7 +2510,7 @@ namespace sql
 
             try
             {
-                validate_view_definition(stmt.table_name, *storage_);
+                validate_view_definition(stmt.table_name, *storage_, *coro_executor_);
             }
             catch (...)
             {
@@ -2384,8 +2692,14 @@ namespace sql
 
     ExecutionResult Executor::execute_select(const SelectStatement& stmt)
     {
-        auto table = run_select_statement(stmt, *storage_);
-        const auto row_count = table.rows.size();
+        std::shared_ptr<ForkJoinScheduler> scheduler;
+        if (const auto parallel_coro_executor = std::dynamic_pointer_cast<ParallelCoroExecutor>(coro_executor_))
+        {
+            scheduler = parallel_coro_executor->scheduler();
+        }
+
+        auto table = run_select_statement(stmt, *storage_, scheduler.get());
+        const auto row_count = count_execution_rows(table, *coro_executor_);
         return make_success_result(ExecutionResultKind::Select,
                                    row_count,
                                    std::to_string(row_count) + " row(s) selected",

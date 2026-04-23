@@ -1,5 +1,6 @@
 set(SQL_TEST_SOURCES
     test_main.cpp
+    coroutine_stream_tests.cpp
     tokenizer_tokenize_tests.cpp
     parser_parse_statement_tests.cpp
     parser_parse_expression_tests.cpp

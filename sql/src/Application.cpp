@@ -4,6 +4,7 @@
 #include "CsvStorage.h"
 #include "Executor.h"
 #include "Parser.h"
+#include "ParallelCoroExecutor.h"
 #include "StringUtils.h"
 #include "Tokenizer.h"
 
@@ -59,8 +60,9 @@ namespace sql
 
             Tokenizer tokenizer(query);
             Parser parser(tokenizer.tokenize());
-            Executor executor(std::make_shared<CsvStorage>());
-            ConsoleOutputWriter writer;
+            auto coro_executor = std::make_shared<ParallelCoroExecutor>();
+            Executor executor(std::make_shared<CsvStorage>(), coro_executor);
+            ConsoleOutputWriter writer(coro_executor);
             const auto result = executor.execute(parser.parse_statement());
             if (!result.success)
             {

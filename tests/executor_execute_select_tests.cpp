@@ -32,6 +32,35 @@ TEST_CASE("returns a structured result for select statements")
     CHECK_EQ(select_result.message, "1 row(s) selected");
 }
 
+TEST_CASE("select results expose reopenable row streams")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, category);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk', 'home');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Write docs', 'work');"));
+
+    const auto result = context.executor.execute(sql_test::parse_statement("SELECT title, category FROM todos ORDER BY title ASC;"));
+    REQUIRE(result.table.has_value());
+
+    std::vector<sql::Row> first_pass;
+    for (const auto& row : result.table->rows())
+    {
+        first_pass.push_back(row);
+    }
+
+    std::vector<sql::Row> second_pass;
+    for (const auto& row : result.table->rows())
+    {
+        second_pass.push_back(row);
+    }
+
+    REQUIRE_EQ(first_pass.size(), 2U);
+    CHECK_EQ(first_pass, second_pass);
+    CHECK_EQ(first_pass[0][0], "Buy milk");
+    CHECK_EQ(first_pass[1][0], "Write docs");
+}
+
 TEST_CASE("create insert and select workflow")
 {
     sql_test::ExecutorContext context;

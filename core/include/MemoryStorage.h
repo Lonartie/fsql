@@ -30,6 +30,16 @@ namespace sql
         /// @return Loaded table.
         Table load_table(const std::string& table_name) const override;
 
+        /// @brief Loads table metadata from memory without materializing rows.
+        /// @param table_name Logical table name.
+        /// @return Table metadata containing the logical name and columns.
+        Table describe_table(const std::string& table_name) const override;
+
+        /// @brief Streams table rows from memory.
+        /// @param table_name Logical table name.
+        /// @return Row stream for the table contents.
+        RowGenerator scan_table(const std::string& table_name) const override;
+
         /// @brief Loads a view definition from memory.
         /// @param view_name Logical view name.
         /// @return Loaded view definition.
