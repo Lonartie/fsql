@@ -30,6 +30,6 @@ namespace sql
     /// @param view_name View to validate.
     /// @param storage Storage backend.
     /// @param coro_executor Coroutine executor used to fully consume the result.
-    void validate_view_definition(const std::string& view_name, const IStorage& storage, const ICoroExecutor& coro_executor);
+    void validate_view_definition(const RelationReference& view_name, const IStorage& storage, const ICoroExecutor& coro_executor);
 }
 

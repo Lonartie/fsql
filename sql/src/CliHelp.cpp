@@ -25,7 +25,7 @@ namespace sql
                 << "Syntax overview:\n"
                 << "  Statements generally look like: KEYWORD ...;\n"
                 << "  String literals use single quotes: 'text'\n"
-                << "  File path sources in SELECT use quoted paths: SELECT * FROM '/path/to/file';\n"
+                << "  Quoted file paths can replace table/view names: SELECT * FROM '/path/to/file';\n"
                 << "  Qualified columns use source.column: tasks.title\n"
                 << "  Boolean-style expressions are used in WHERE/HAVING: done = false, score >= 10\n"
                 << "  Subqueries are written in parentheses: WHERE id IN (SELECT team_id FROM tasks)\n"
@@ -99,10 +99,12 @@ namespace sql
                 << "  sql \"SELECT title FROM todos WHERE done = false ORDER BY title;\"\n"
                 << "  sql \"SELECT team, COUNT(*) FROM tasks GROUP BY team HAVING COUNT(*) >= 2;\"\n"
                 << "  sql \"SELECT src.title FROM '/tmp/tasks.csv' src WHERE src.done = false;\"\n"
+                << "  sql \"INSERT INTO '/tmp/tasks.csv' (title, done) VALUES ('Buy milk', false);\"\n"
                 << "  sql \"INSERT INTO todos (title, done) VALUES ('Buy milk', false);\"\n"
                 << "  sql \"UPDATE todos SET done = true WHERE title = 'Buy milk';\"\n"
                 << "  sql \"DELETE FROM todos WHERE done = true;\"\n"
                 << "  sql \"CREATE TABLE todos (id AUTO_INCREMENT, title, done = false);\"\n"
+                << "  sql \"CREATE VIEW '/tmp/open_todos' AS SELECT title FROM '/tmp/todos.csv' WHERE done = false;\"\n"
                 << "  sql \"CREATE VIEW open_todos AS SELECT title FROM todos WHERE done = false;\"\n"
                 << "  sql \"DROP VIEW open_todos;\"\n";
         }
@@ -133,6 +135,7 @@ namespace sql
             output
                 << "Examples:\n"
                 << "  insert \"INTO todos VALUES ('Buy milk', false);\"\n"
+                << "  insert \"INTO '/tmp/todos.csv' VALUES ('Buy milk', false);\"\n"
                 << "  insert \"INTO todos (title, done) VALUES ('Write docs', true);\"\n"
                 << "  insert \"INTO todos (title) VALUES ('Uses default done value');\"\n"
                 << "  insert \"INTO events VALUES (NOW(), 'created');\"\n";
@@ -148,6 +151,7 @@ namespace sql
             output
                 << "Examples:\n"
                 << "  update \"todos SET done = true WHERE title = 'Buy milk';\"\n"
+                << "  update \"'/tmp/todos.csv' SET done = true WHERE title = 'Buy milk';\"\n"
                 << "  update \"todos SET done = true, category = 'done' WHERE done = false;\"\n"
                 << "  update \"tasks SET priority = priority + 1 WHERE team = 'ops';\"\n";
         }
@@ -162,6 +166,7 @@ namespace sql
             output
                 << "Examples:\n"
                 << "  delete \"FROM todos WHERE done = true;\"\n"
+                << "  delete \"FROM '/tmp/todos.csv' WHERE done = true;\"\n"
                 << "  delete \"FROM logs WHERE created_at < '2026-01-01';\"\n"
                 << "  delete \"FROM tasks;\"\n";
         }
@@ -176,7 +181,9 @@ namespace sql
             output
                 << "Examples:\n"
                 << "  create \"TABLE todos (title, done = false);\"\n"
+                << "  create \"TABLE '/tmp/todos' (title, done = false);\"\n"
                 << "  create \"TABLE tasks (id AUTO_INCREMENT, title, team, created_at = NOW());\"\n"
+                << "  create \"VIEW '/tmp/open_tasks' AS SELECT title FROM '/tmp/tasks.csv' WHERE done = false;\"\n"
                 << "  create \"VIEW open_tasks AS SELECT title FROM tasks WHERE done = false;\"\n";
         }
 
@@ -190,6 +197,8 @@ namespace sql
             output
                 << "Examples:\n"
                 << "  drop \"TABLE todos;\"\n"
+                << "  drop \"TABLE '/tmp/todos.csv';\"\n"
+                << "  drop \"VIEW '/tmp/open_tasks.view.sql';\"\n"
                 << "  drop \"VIEW open_tasks;\"\n";
         }
 

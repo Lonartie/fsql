@@ -9,7 +9,8 @@ TEST_CASE("parses create statement")
     const auto statement = sql_test::parse_statement("CREATE TABLE todos (title, category, text, done);");
 
     CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Create));
-    CHECK_EQ(statement.create.table_name, "todos");
+    CHECK_EQ(static_cast<int>(statement.create.table_name.kind), static_cast<int>(sql::RelationReference::Kind::Identifier));
+    CHECK_EQ(statement.create.table_name.name, "todos");
     REQUIRE_EQ(statement.create.columns.size(), 4U);
     CHECK_EQ(statement.create.columns[0].name, "title");
     CHECK_FALSE(statement.create.columns[0].auto_increment);
@@ -22,7 +23,7 @@ TEST_CASE("parses view statements")
 
     CHECK_EQ(static_cast<int>(create_statement.kind), static_cast<int>(sql::Statement::Kind::Create));
     CHECK_EQ(static_cast<int>(create_statement.create.object_kind), static_cast<int>(sql::SchemaObjectKind::View));
-    CHECK_EQ(create_statement.create.table_name, "open_tasks");
+    CHECK_EQ(create_statement.create.table_name.name, "open_tasks");
     REQUIRE(create_statement.create.view_query != nullptr);
     REQUIRE_EQ(create_statement.create.view_query->sources.size(), 1U);
     CHECK_EQ(create_statement.create.view_query->sources[0].name, "tasks");
@@ -32,13 +33,13 @@ TEST_CASE("parses view statements")
     const auto drop_statement = sql_test::parse_statement("DROP VIEW open_tasks;");
     CHECK_EQ(static_cast<int>(drop_statement.kind), static_cast<int>(sql::Statement::Kind::Drop));
     CHECK_EQ(static_cast<int>(drop_statement.drop.object_kind), static_cast<int>(sql::SchemaObjectKind::View));
-    CHECK_EQ(drop_statement.drop.table_name, "open_tasks");
+    CHECK_EQ(drop_statement.drop.table_name.name, "open_tasks");
 
     const auto alter_statement = sql_test::parse_statement("ALTER VIEW open_tasks AS SELECT title FROM tasks WHERE done = true;");
     CHECK_EQ(static_cast<int>(alter_statement.kind), static_cast<int>(sql::Statement::Kind::Alter));
     CHECK_EQ(static_cast<int>(alter_statement.alter.object_kind), static_cast<int>(sql::SchemaObjectKind::View));
     CHECK_EQ(static_cast<int>(alter_statement.alter.action), static_cast<int>(sql::AlterAction::SetViewQuery));
-    CHECK_EQ(alter_statement.alter.table_name, "open_tasks");
+    CHECK_EQ(alter_statement.alter.table_name.name, "open_tasks");
     REQUIRE(alter_statement.alter.view_query != nullptr);
     REQUIRE_EQ(alter_statement.alter.view_query->sources.size(), 1U);
     CHECK_EQ(alter_statement.alter.view_query->sources[0].name, "tasks");
@@ -51,7 +52,7 @@ TEST_CASE("parses insert with explicit columns")
     CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Insert));
     CHECK(statement.insert.columns.has_value());
     REQUIRE(statement.insert.columns.has_value());
-    CHECK_EQ(statement.insert.table_name, "todos");
+    CHECK_EQ(statement.insert.table_name.name, "todos");
     CHECK_EQ(statement.insert.columns->size(), 2U);
     CHECK_EQ((*statement.insert.columns)[0], "title");
     REQUIRE_EQ(statement.insert.values.size(), 2U);
@@ -81,7 +82,7 @@ TEST_CASE("parses update assignments")
     const auto statement = sql_test::parse_statement("UPDATE todos SET done = true, category = 'done' WHERE title = 'Buy milk';");
 
     CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Update));
-    CHECK_EQ(statement.update.table_name, "todos");
+    CHECK_EQ(statement.update.table_name.name, "todos");
     REQUIRE_EQ(statement.update.assignments.size(), 2U);
     CHECK_EQ(statement.update.assignments[0].first, "done");
     CHECK(statement.update.assignments[0].second != nullptr);
@@ -98,7 +99,7 @@ TEST_CASE("parses alter table actions")
     const auto add_statement = sql_test::parse_statement("ALTER TABLE todos ADD COLUMN archived_at = NULL;");
     CHECK_EQ(static_cast<int>(add_statement.kind), static_cast<int>(sql::Statement::Kind::Alter));
     CHECK_EQ(static_cast<int>(add_statement.alter.action), static_cast<int>(sql::AlterAction::AddColumn));
-    CHECK_EQ(add_statement.alter.table_name, "todos");
+    CHECK_EQ(add_statement.alter.table_name.name, "todos");
     CHECK_EQ(add_statement.alter.column.name, "archived_at");
     REQUIRE(add_statement.alter.column.default_value != nullptr);
     CHECK_EQ(static_cast<int>(add_statement.alter.column.default_value->kind), static_cast<int>(sql::ExpressionKind::Null));
@@ -228,6 +229,45 @@ TEST_CASE("parses quoted file path select sources")
     CHECK_EQ(statement.select.projections[0]->text, "src.title");
 }
 
+TEST_CASE("parses quoted file paths everywhere table or view references are accepted")
+{
+    const auto create_table = sql_test::parse_statement("CREATE TABLE 'tmp/data/tasks' (title, done);");
+    CHECK_EQ(static_cast<int>(create_table.create.table_name.kind), static_cast<int>(sql::RelationReference::Kind::FilePath));
+    CHECK_EQ(create_table.create.table_name.name, "tmp/data/tasks");
+
+    const auto create_view = sql_test::parse_statement("CREATE VIEW 'tmp/views/open_tasks' AS SELECT title FROM tasks;");
+    CHECK_EQ(static_cast<int>(create_view.create.table_name.kind), static_cast<int>(sql::RelationReference::Kind::FilePath));
+    CHECK_EQ(create_view.create.table_name.name, "tmp/views/open_tasks");
+
+    const auto alter_table = sql_test::parse_statement("ALTER TABLE 'tmp/data/tasks.csv' ADD COLUMN archived_at;");
+    CHECK_EQ(static_cast<int>(alter_table.alter.table_name.kind), static_cast<int>(sql::RelationReference::Kind::FilePath));
+    CHECK_EQ(alter_table.alter.table_name.name, "tmp/data/tasks.csv");
+
+    const auto alter_view = sql_test::parse_statement("ALTER VIEW 'tmp/views/open_tasks.view.sql' AS SELECT title FROM tasks;");
+    CHECK_EQ(static_cast<int>(alter_view.alter.table_name.kind), static_cast<int>(sql::RelationReference::Kind::FilePath));
+    CHECK_EQ(alter_view.alter.table_name.name, "tmp/views/open_tasks.view.sql");
+
+    const auto insert_statement = sql_test::parse_statement("INSERT INTO 'tmp/data/tasks.csv' VALUES ('Patch release', false);");
+    CHECK_EQ(static_cast<int>(insert_statement.insert.table_name.kind), static_cast<int>(sql::RelationReference::Kind::FilePath));
+    CHECK_EQ(insert_statement.insert.table_name.name, "tmp/data/tasks.csv");
+
+    const auto update_statement = sql_test::parse_statement("UPDATE 'tmp/data/tasks.csv' SET done = true;");
+    CHECK_EQ(static_cast<int>(update_statement.update.table_name.kind), static_cast<int>(sql::RelationReference::Kind::FilePath));
+    CHECK_EQ(update_statement.update.table_name.name, "tmp/data/tasks.csv");
+
+    const auto delete_statement = sql_test::parse_statement("DELETE FROM 'tmp/data/tasks.csv';");
+    CHECK_EQ(static_cast<int>(delete_statement.delete_statement.table_name.kind), static_cast<int>(sql::RelationReference::Kind::FilePath));
+    CHECK_EQ(delete_statement.delete_statement.table_name.name, "tmp/data/tasks.csv");
+
+    const auto drop_table = sql_test::parse_statement("DROP TABLE 'tmp/data/tasks.csv';");
+    CHECK_EQ(static_cast<int>(drop_table.drop.table_name.kind), static_cast<int>(sql::RelationReference::Kind::FilePath));
+    CHECK_EQ(drop_table.drop.table_name.name, "tmp/data/tasks.csv");
+
+    const auto drop_view = sql_test::parse_statement("DROP VIEW 'tmp/views/open_tasks.view.sql';");
+    CHECK_EQ(static_cast<int>(drop_view.drop.table_name.kind), static_cast<int>(sql::RelationReference::Kind::FilePath));
+    CHECK_EQ(drop_view.drop.table_name.name, "tmp/views/open_tasks.view.sql");
+}
+
 TEST_CASE("parses select source subqueries with aliases")
 {
     const auto statement = sql_test::parse_statement("SELECT t.title, defaults.category FROM tasks t, (SELECT category FROM settings) defaults WHERE t.category = defaults.category;");
@@ -338,7 +378,7 @@ TEST_CASE("parses drop table statement")
 {
     const auto statement = sql_test::parse_statement("DROP TABLE todos;");
     CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Drop));
-    CHECK_EQ(statement.drop.table_name, "todos");
+    CHECK_EQ(statement.drop.table_name.name, "todos");
 }
 
 TEST_CASE("parses complex WHERE expressions")
@@ -377,7 +417,7 @@ TEST_CASE("parses delete statement with where")
 {
     const auto statement = sql_test::parse_statement("DELETE FROM todos WHERE done = true;");
     CHECK_EQ(static_cast<int>(statement.kind), static_cast<int>(sql::Statement::Kind::Delete));
-    CHECK_EQ(statement.delete_statement.table_name, "todos");
+    CHECK_EQ(statement.delete_statement.table_name.name, "todos");
     CHECK(statement.delete_statement.where != nullptr);
 }
 

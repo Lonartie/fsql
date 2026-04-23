@@ -28,7 +28,7 @@ namespace sql
         if (match_keyword("TABLE"))
         {
             stmt.object_kind = SchemaObjectKind::Table;
-            stmt.table_name = expect_identifier("Expected table name");
+            stmt.table_name = expect_relation_reference("Expected table name");
 
             if (match_keyword("ADD"))
             {
@@ -101,7 +101,7 @@ namespace sql
         else if (match_keyword("VIEW"))
         {
             stmt.object_kind = SchemaObjectKind::View;
-            stmt.table_name = expect_identifier("Expected view name");
+            stmt.table_name = expect_relation_reference("Expected view name");
             expect_keyword("AS");
             if (!match_keyword("SELECT"))
             {
@@ -130,7 +130,7 @@ namespace sql
         if (match_keyword("TABLE"))
         {
             stmt.object_kind = SchemaObjectKind::Table;
-            stmt.table_name = expect_identifier("Expected table name");
+            stmt.table_name = expect_relation_reference("Expected table name");
             expect(TokenType::LParen, "Expected '(' after table name");
             stmt.columns = parse_column_definition_list();
             expect(TokenType::RParen, "Expected ')' after column list");
@@ -140,7 +140,7 @@ namespace sql
         else if (match_keyword("VIEW"))
         {
             stmt.object_kind = SchemaObjectKind::View;
-            stmt.table_name = expect_identifier("Expected view name");
+            stmt.table_name = expect_relation_reference("Expected view name");
             expect_keyword("AS");
             if (!match_keyword("SELECT"))
             {
@@ -167,14 +167,14 @@ namespace sql
         if (match_keyword("TABLE"))
         {
             stmt.object_kind = SchemaObjectKind::Table;
-            stmt.table_name = expect_identifier("Expected table name");
+            stmt.table_name = expect_relation_reference("Expected table name");
             consume_optional(TokenType::Semicolon);
             expect(TokenType::End, "Unexpected tokens after DROP TABLE");
         }
         else if (match_keyword("VIEW"))
         {
             stmt.object_kind = SchemaObjectKind::View;
-            stmt.table_name = expect_identifier("Expected view name");
+            stmt.table_name = expect_relation_reference("Expected view name");
             consume_optional(TokenType::Semicolon);
             expect(TokenType::End, "Unexpected tokens after DROP VIEW");
         }
@@ -193,7 +193,7 @@ namespace sql
     {
         DeleteStatement stmt;
         expect_keyword("FROM");
-        stmt.table_name = expect_identifier("Expected table name");
+        stmt.table_name = expect_relation_reference("Expected table name");
         if (match_keyword("WHERE"))
         {
             stmt.where = parse_expression();
@@ -211,7 +211,7 @@ namespace sql
     {
         InsertStatement stmt;
         expect_keyword("INTO");
-        stmt.table_name = expect_identifier("Expected table name");
+        stmt.table_name = expect_relation_reference("Expected table name");
         if (check(TokenType::LParen))
         {
             advance();
@@ -292,7 +292,7 @@ namespace sql
     Statement Parser::parse_update()
     {
         UpdateStatement stmt;
-        stmt.table_name = expect_identifier("Expected table name");
+        stmt.table_name = expect_relation_reference("Expected table name");
         expect_keyword("SET");
         do
         {
@@ -360,22 +360,11 @@ namespace sql
             return source;
         }
 
-        if (check(TokenType::String))
-        {
-            source.kind = SelectSource::Kind::FilePath;
-            source.name = advance().text;
-            if (match_keyword("AS"))
-            {
-                source.alias = expect_identifier("Expected alias after AS");
-            }
-            else if (check(TokenType::Identifier) && !is_select_source_terminator(peek()))
-            {
-                source.alias = advance().text;
-            }
-            return source;
-        }
-
-        source.name = expect_identifier("Expected table name");
+        const auto relation = expect_relation_reference("Expected table name");
+        source.kind = relation.kind == RelationReference::Kind::FilePath
+            ? SelectSource::Kind::FilePath
+            : SelectSource::Kind::Table;
+        source.name = relation.name;
         if (match_keyword("AS"))
         {
             source.alias = expect_identifier("Expected alias after AS");

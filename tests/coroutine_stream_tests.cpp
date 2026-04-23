@@ -30,44 +30,44 @@ namespace
     class StreamingOnlyStorage final : public sql::IStorage
     {
     public:
-        std::filesystem::path table_path(const std::string& table_name) const override
+        std::filesystem::path table_path(const sql::RelationReference& table_name) const override
         {
-            return std::filesystem::path(table_name + ".csv");
+            return std::filesystem::path(table_name.name + ".csv");
         }
 
-        bool has_table(const std::string& table_name) const override
+        bool has_table(const sql::RelationReference& table_name) const override
         {
-            return table_name == table_.name;
+            return table_name.name == table_.name;
         }
 
-        bool has_view(const std::string& view_name) const override
+        bool has_view(const sql::RelationReference& view_name) const override
         {
             static_cast<void>(view_name);
             return false;
         }
 
-        sql::Table load_table(const std::string& table_name) const override
+        sql::Table load_table(const sql::RelationReference& table_name) const override
         {
             ++load_table_calls;
-            throw std::runtime_error("load_table should not be called for streamed SELECT paths: " + table_name);
+            throw std::runtime_error("load_table should not be called for streamed SELECT paths: " + table_name.name);
         }
 
-        sql::Table describe_table(const std::string& table_name) const override
+        sql::Table describe_table(const sql::RelationReference& table_name) const override
         {
             if (!has_table(table_name))
             {
-                throw std::runtime_error("Unknown table: " + table_name);
+                throw std::runtime_error("Unknown table: " + table_name.name);
             }
 
             ++describe_table_calls;
-            return {table_.name, table_.columns, {}};
+            return {table_.name, std::nullopt, table_.columns, {}};
         }
 
-        sql::RowGenerator scan_table(const std::string& table_name) const override
+        sql::RowGenerator scan_table(const sql::RelationReference& table_name) const override
         {
             if (!has_table(table_name))
             {
-                throw std::runtime_error("Unknown table: " + table_name);
+                throw std::runtime_error("Unknown table: " + table_name.name);
             }
 
             ++scan_table_calls;
@@ -77,9 +77,9 @@ namespace
             }
         }
 
-        sql::ViewDefinition load_view(const std::string& view_name) const override
+        sql::ViewDefinition load_view(const sql::RelationReference& view_name) const override
         {
-            throw std::runtime_error("Unknown view: " + view_name);
+            throw std::runtime_error("Unknown view: " + view_name.name);
         }
 
         void save_table(const sql::Table& table) override
@@ -93,13 +93,13 @@ namespace
             throw std::runtime_error("Views are not supported in this test storage");
         }
 
-        void delete_table(const std::string& table_name) override
+        void delete_table(const sql::RelationReference& table_name) override
         {
             static_cast<void>(table_name);
             throw std::runtime_error("DELETE TABLE is not supported in this test storage");
         }
 
-        void delete_view(const std::string& view_name) override
+        void delete_view(const sql::RelationReference& view_name) override
         {
             static_cast<void>(view_name);
             throw std::runtime_error("DELETE VIEW is not supported in this test storage");
@@ -122,34 +122,34 @@ namespace
         mutable std::size_t scan_table_calls = 0;
 
     private:
-        sql::Table table_{"todos", {"title", "done"}, {{"Buy milk", "false"}, {"Archive logs", "true"}}};
+        sql::Table table_{"todos", std::nullopt, {"title", "done"}, {{"Buy milk", "false"}, {"Archive logs", "true"}}};
     };
 
     class ParallelDescribeStorage final : public sql::IStorage
     {
     public:
-        std::filesystem::path table_path(const std::string& table_name) const override
+        std::filesystem::path table_path(const sql::RelationReference& table_name) const override
         {
-            return std::filesystem::path(table_name + ".csv");
+            return std::filesystem::path(table_name.name + ".csv");
         }
 
-        bool has_table(const std::string& table_name) const override
+        bool has_table(const sql::RelationReference& table_name) const override
         {
-            return table_name == tasks_.name || table_name == teams_.name;
+            return table_name.name == tasks_.name || table_name.name == teams_.name;
         }
 
-        bool has_view(const std::string& view_name) const override
+        bool has_view(const sql::RelationReference& view_name) const override
         {
             static_cast<void>(view_name);
             return false;
         }
 
-        sql::Table load_table(const std::string& table_name) const override
+        sql::Table load_table(const sql::RelationReference& table_name) const override
         {
-            throw std::runtime_error("load_table should not be called in this test: " + table_name);
+            throw std::runtime_error("load_table should not be called in this test: " + table_name.name);
         }
 
-        sql::Table describe_table(const std::string& table_name) const override
+        sql::Table describe_table(const sql::RelationReference& table_name) const override
         {
             {
                 std::unique_lock lock(mutex_);
@@ -177,21 +177,21 @@ namespace
             }
             condition_.notify_all();
 
-            if (table_name == tasks_.name)
+            if (table_name.name == tasks_.name)
             {
-                return {tasks_.name, tasks_.columns, {}};
+                return {tasks_.name, std::nullopt, tasks_.columns, {}};
             }
-            if (table_name == teams_.name)
+            if (table_name.name == teams_.name)
             {
-                return {teams_.name, teams_.columns, {}};
+                return {teams_.name, std::nullopt, teams_.columns, {}};
             }
 
-            throw std::runtime_error("Unknown table: " + table_name);
+            throw std::runtime_error("Unknown table: " + table_name.name);
         }
 
-        sql::RowGenerator scan_table(const std::string& table_name) const override
+        sql::RowGenerator scan_table(const sql::RelationReference& table_name) const override
         {
-            if (table_name == tasks_.name)
+            if (table_name.name == tasks_.name)
             {
                 for (const auto& row : tasks_.rows)
                 {
@@ -199,7 +199,7 @@ namespace
                 }
                 co_return;
             }
-            if (table_name == teams_.name)
+            if (table_name.name == teams_.name)
             {
                 for (const auto& row : teams_.rows)
                 {
@@ -208,12 +208,12 @@ namespace
                 co_return;
             }
 
-            throw std::runtime_error("Unknown table: " + table_name);
+            throw std::runtime_error("Unknown table: " + table_name.name);
         }
 
-        sql::ViewDefinition load_view(const std::string& view_name) const override
+        sql::ViewDefinition load_view(const sql::RelationReference& view_name) const override
         {
-            throw std::runtime_error("Unknown view: " + view_name);
+            throw std::runtime_error("Unknown view: " + view_name.name);
         }
 
         void save_table(const sql::Table& table) override
@@ -228,13 +228,13 @@ namespace
             throw std::runtime_error("save_view is not supported in this test storage");
         }
 
-        void delete_table(const std::string& table_name) override
+        void delete_table(const sql::RelationReference& table_name) override
         {
             static_cast<void>(table_name);
             throw std::runtime_error("delete_table is not supported in this test storage");
         }
 
-        void delete_view(const std::string& view_name) override
+        void delete_view(const sql::RelationReference& view_name) override
         {
             static_cast<void>(view_name);
             throw std::runtime_error("delete_view is not supported in this test storage");
@@ -271,8 +271,8 @@ namespace
         mutable std::size_t max_active_describes_ = 0;
         mutable std::set<std::thread::id> describe_thread_ids_;
 
-        sql::Table tasks_{"tasks", {"title", "team_id"}, {{"Patch release", "10"}, {"Write docs", "20"}}};
-        sql::Table teams_{"teams", {"id", "name"}, {{"10", "ops"}, {"20", "docs"}}};
+        sql::Table tasks_{"tasks", std::nullopt, {"title", "team_id"}, {{"Patch release", "10"}, {"Write docs", "20"}}};
+        sql::Table teams_{"teams", std::nullopt, {"id", "name"}, {{"10", "ops"}, {"20", "docs"}}};
     };
 }
 

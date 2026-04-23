@@ -32,6 +32,20 @@ namespace sql
             result.table = std::move(table);
             return result;
         }
+
+        std::string relation_name(const RelationReference& reference)
+        {
+            return reference.name;
+        }
+
+        std::optional<std::filesystem::path> relation_storage_path(const RelationReference& reference)
+        {
+            if (reference.kind != RelationReference::Kind::FilePath)
+            {
+                return std::nullopt;
+            }
+            return std::filesystem::path(reference.name);
+        }
     }
 
     Executor::Executor(std::shared_ptr<IStorage> storage, std::shared_ptr<ICoroExecutor> coro_executor)
@@ -90,7 +104,7 @@ namespace sql
         const bool has_view = storage_->has_view(stmt.table_name);
         if (has_table && has_view)
         {
-            fail("Name collision between table and view: " + stmt.table_name);
+            fail("Name collision between table and view: " + relation_name(stmt.table_name));
         }
 
         if (stmt.object_kind == SchemaObjectKind::View)
@@ -105,13 +119,14 @@ namespace sql
             }
             if (has_table)
             {
-                fail("Cannot ALTER VIEW because '" + stmt.table_name + "' is a table");
+                fail("Cannot ALTER VIEW because '" + relation_name(stmt.table_name) + "' is a table");
             }
 
             const auto previous_view = storage_->load_view(stmt.table_name);
 
             ViewDefinition view;
-            view.name = stmt.table_name;
+            view.name = relation_name(stmt.table_name);
+            view.storage_path = relation_storage_path(stmt.table_name);
             view.select_statement = serialize_select_statement(*stmt.view_query);
             storage_->save_view(view);
 
@@ -125,12 +140,12 @@ namespace sql
                 throw;
             }
 
-            return make_success_result(ExecutionResultKind::Alter, 0, "Altered view '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered view '" + relation_name(stmt.table_name) + "'");
         }
 
         if (has_view)
         {
-            fail("Cannot ALTER TABLE on view: " + stmt.table_name);
+            fail("Cannot ALTER TABLE on view: " + relation_name(stmt.table_name));
         }
 
         Table table = storage_->load_table(stmt.table_name);
@@ -180,7 +195,7 @@ namespace sql
             }
 
             storage_->save_table(table);
-            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + relation_name(stmt.table_name) + "'");
         }
         case AlterAction::DropColumn:
         {
@@ -197,7 +212,7 @@ namespace sql
             }
 
             storage_->save_table(table);
-            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + relation_name(stmt.table_name) + "'");
         }
         case AlterAction::RenameColumn:
         {
@@ -215,7 +230,7 @@ namespace sql
             metadata.visible_name = stmt.new_name;
             table.columns[index] = serialize_column_metadata(metadata);
             storage_->save_table(table);
-            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + relation_name(stmt.table_name) + "'");
         }
         case AlterAction::SetDefault:
         {
@@ -228,7 +243,7 @@ namespace sql
             metadata.default_expression = serialize_expression(stmt.column.default_value);
             table.columns[index] = serialize_column_metadata(metadata);
             storage_->save_table(table);
-            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + relation_name(stmt.table_name) + "'");
         }
         case AlterAction::DropDefault:
         {
@@ -237,7 +252,7 @@ namespace sql
             metadata.default_expression.clear();
             table.columns[index] = serialize_column_metadata(metadata);
             storage_->save_table(table);
-            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + relation_name(stmt.table_name) + "'");
         }
         case AlterAction::SetAutoIncrement:
         {
@@ -248,7 +263,7 @@ namespace sql
             ensure_single_auto_increment_column(table);
             backfill_auto_increment_column(table, index);
             storage_->save_table(table);
-            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + relation_name(stmt.table_name) + "'");
         }
         case AlterAction::DropAutoIncrement:
         {
@@ -257,7 +272,7 @@ namespace sql
             metadata.auto_increment = false;
             table.columns[index] = serialize_column_metadata(metadata);
             storage_->save_table(table);
-            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + relation_name(stmt.table_name) + "'");
         }
         case AlterAction::SetViewQuery:
             fail("ALTER VIEW action reached ALTER TABLE handler");
@@ -276,15 +291,16 @@ namespace sql
             }
             if (storage_->has_table(stmt.table_name))
             {
-                fail("Table already exists: " + stmt.table_name);
+                fail("Table already exists: " + relation_name(stmt.table_name));
             }
             if (storage_->has_view(stmt.table_name))
             {
-                fail("View already exists: " + stmt.table_name);
+                fail("View already exists: " + relation_name(stmt.table_name));
             }
 
             ViewDefinition view;
-            view.name = stmt.table_name;
+            view.name = relation_name(stmt.table_name);
+            view.storage_path = relation_storage_path(stmt.table_name);
             view.select_statement = serialize_select_statement(*stmt.view_query);
             storage_->save_view(view);
 
@@ -298,7 +314,7 @@ namespace sql
                 throw;
             }
 
-            return make_success_result(ExecutionResultKind::Create, 0, "Created view '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Create, 0, "Created view '" + relation_name(stmt.table_name) + "'");
         }
 
         if (stmt.columns.empty())
@@ -307,15 +323,16 @@ namespace sql
         }
         if (storage_->has_table(stmt.table_name))
         {
-            fail("Table already exists: " + stmt.table_name);
+            fail("Table already exists: " + relation_name(stmt.table_name));
         }
         if (storage_->has_view(stmt.table_name))
         {
-            fail("View already exists: " + stmt.table_name);
+            fail("View already exists: " + relation_name(stmt.table_name));
         }
 
         Table table;
-        table.name = stmt.table_name;
+        table.name = relation_name(stmt.table_name);
+        table.storage_path = relation_storage_path(stmt.table_name);
         table.columns.reserve(stmt.columns.size());
         for (const auto& column : stmt.columns)
         {
@@ -329,7 +346,7 @@ namespace sql
             table.columns.push_back(serialize_column_metadata(metadata));
         }
         storage_->save_table(table);
-        return make_success_result(ExecutionResultKind::Create, 0, "Created table '" + stmt.table_name + "'");
+        return make_success_result(ExecutionResultKind::Create, 0, "Created table '" + relation_name(stmt.table_name) + "'");
     }
 
     ExecutionResult Executor::execute_drop(const DropStatement& stmt)
@@ -338,32 +355,32 @@ namespace sql
         const bool has_view = storage_->has_view(stmt.table_name);
         if (has_table && has_view)
         {
-            fail("Name collision between table and view: " + stmt.table_name);
+            fail("Name collision between table and view: " + relation_name(stmt.table_name));
         }
 
         if (stmt.object_kind == SchemaObjectKind::View)
         {
             if (has_table)
             {
-                fail("Cannot DROP VIEW because '" + stmt.table_name + "' is a table");
+                fail("Cannot DROP VIEW because '" + relation_name(stmt.table_name) + "' is a table");
             }
             storage_->delete_view(stmt.table_name);
-            return make_success_result(ExecutionResultKind::Drop, 0, "Dropped view '" + stmt.table_name + "'");
+            return make_success_result(ExecutionResultKind::Drop, 0, "Dropped view '" + relation_name(stmt.table_name) + "'");
         }
 
         if (has_view)
         {
-            fail("Cannot DROP TABLE on view: " + stmt.table_name);
+            fail("Cannot DROP TABLE on view: " + relation_name(stmt.table_name));
         }
         storage_->delete_table(stmt.table_name);
-        return make_success_result(ExecutionResultKind::Drop, 0, "Dropped table '" + stmt.table_name + "'");
+        return make_success_result(ExecutionResultKind::Drop, 0, "Dropped table '" + relation_name(stmt.table_name) + "'");
     }
 
     ExecutionResult Executor::execute_delete(const DeleteStatement& stmt)
     {
         if (storage_->has_view(stmt.table_name))
         {
-            fail("Cannot DELETE FROM view: " + stmt.table_name);
+            fail("Cannot DELETE FROM view: " + relation_name(stmt.table_name));
         }
 
         Table table = storage_->load_table(stmt.table_name);
@@ -381,14 +398,14 @@ namespace sql
         storage_->save_table(table);
         return make_success_result(ExecutionResultKind::Delete,
                                    deleted,
-                                   "Deleted " + std::to_string(deleted) + " row(s) from '" + stmt.table_name + "'");
+                                   "Deleted " + std::to_string(deleted) + " row(s) from '" + relation_name(stmt.table_name) + "'");
     }
 
     ExecutionResult Executor::execute_insert(const InsertStatement& stmt)
     {
         if (storage_->has_view(stmt.table_name))
         {
-            fail("Cannot INSERT INTO view: " + stmt.table_name);
+            fail("Cannot INSERT INTO view: " + relation_name(stmt.table_name));
         }
 
         Table table = storage_->load_table(stmt.table_name);
@@ -455,7 +472,7 @@ namespace sql
 
         table.rows.push_back(std::move(row));
         storage_->save_table(table);
-        return make_success_result(ExecutionResultKind::Insert, 1, "Inserted 1 row into '" + stmt.table_name + "'");
+        return make_success_result(ExecutionResultKind::Insert, 1, "Inserted 1 row into '" + relation_name(stmt.table_name) + "'");
     }
 
     ExecutionResult Executor::execute_select(const SelectStatement& stmt)
@@ -478,7 +495,7 @@ namespace sql
     {
         if (storage_->has_view(stmt.table_name))
         {
-            fail("Cannot UPDATE view: " + stmt.table_name);
+            fail("Cannot UPDATE view: " + relation_name(stmt.table_name));
         }
 
         Table table = storage_->load_table(stmt.table_name);
@@ -507,6 +524,6 @@ namespace sql
         storage_->save_table(table);
         return make_success_result(ExecutionResultKind::Update,
                                    updated,
-                                   "Updated " + std::to_string(updated) + " row(s) in '" + stmt.table_name + "'");
+                                   "Updated " + std::to_string(updated) + " row(s) in '" + relation_name(stmt.table_name) + "'");
     }
 }

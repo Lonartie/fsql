@@ -281,5 +281,86 @@ TEST_CASE("drops views from memory storage")
     CHECK_THROWS_AS(context.storage->load_view("open_tasks"), std::runtime_error);
 }
 
+TEST_CASE("csv storage supports quoted file paths for table statements")
+{
+    sql_test::TemporaryDirectory temp_directory;
+    std::filesystem::create_directories(temp_directory.path / "data");
+
+    auto storage = std::make_shared<sql::CsvStorage>(temp_directory.path);
+    sql::Executor executor(storage);
+    const auto table_path = temp_directory.path / "data" / "tasks";
+    const auto table_path_text = table_path.string();
+
+    auto run = [&](const std::string& query)
+    {
+        const auto result = executor.execute(sql_test::parse_statement(query));
+        REQUIRE(result.success);
+        return result;
+    };
+
+    const auto create_result = run("CREATE TABLE '" + table_path_text + "' (id AUTO_INCREMENT, title, done = false);");
+    CHECK_EQ(create_result.message, "Created table '" + table_path_text + "'");
+    CHECK(std::filesystem::exists(table_path_text + ".csv"));
+
+    const auto insert_result = run("INSERT INTO '" + table_path_text + "' (title) VALUES ('Patch release');");
+    CHECK_EQ(insert_result.message, "Inserted 1 row into '" + table_path_text + "'");
+
+    const auto update_result = run("UPDATE '" + table_path_text + "' SET done = true WHERE title = 'Patch release';");
+    CHECK_EQ(update_result.message, "Updated 1 row(s) in '" + table_path_text + "'");
+
+    const auto loaded = storage->load_table({sql::RelationReference::Kind::FilePath, table_path_text});
+    REQUIRE_EQ(loaded.rows.size(), 1U);
+    CHECK_EQ(loaded.rows[0][0], "1");
+    CHECK_EQ(loaded.rows[0][1], "Patch release");
+    CHECK_EQ(loaded.rows[0][2], "true");
+
+    const auto delete_result = run("DELETE FROM '" + table_path_text + "' WHERE done = true;");
+    CHECK_EQ(delete_result.message, "Deleted 1 row(s) from '" + table_path_text + "'");
+    CHECK(storage->load_table({sql::RelationReference::Kind::FilePath, table_path_text}).rows.empty());
+
+    const auto drop_result = run("DROP TABLE '" + table_path_text + "';");
+    CHECK_EQ(drop_result.message, "Dropped table '" + table_path_text + "'");
+    CHECK_FALSE(std::filesystem::exists(table_path_text + ".csv"));
+}
+
+TEST_CASE("csv storage supports quoted file paths for view statements")
+{
+    sql_test::TemporaryDirectory temp_directory;
+    std::filesystem::create_directories(temp_directory.path / "tables");
+    std::filesystem::create_directories(temp_directory.path / "views");
+
+    auto storage = std::make_shared<sql::CsvStorage>(temp_directory.path);
+    sql::Executor executor(storage);
+    const auto table_path = temp_directory.path / "tables" / "tasks";
+    const auto view_path = temp_directory.path / "views" / "open_tasks";
+    const auto table_path_text = table_path.string();
+    const auto view_path_text = view_path.string();
+
+    auto run = [&](const std::string& query)
+    {
+        const auto result = executor.execute(sql_test::parse_statement(query));
+        REQUIRE(result.success);
+        return result;
+    };
+
+    run("CREATE TABLE '" + table_path_text + "' (title, done);");
+    run("INSERT INTO '" + table_path_text + "' VALUES ('Patch release', false);");
+    run("INSERT INTO '" + table_path_text + "' VALUES ('Archive logs', true);");
+
+    const auto create_result = run("CREATE VIEW '" + view_path_text + "' AS SELECT title FROM '" + table_path_text + "' WHERE done = false;");
+    CHECK_EQ(create_result.message, "Created view '" + view_path_text + "'");
+    CHECK(std::filesystem::exists(view_path_text + ".view.sql"));
+
+    const auto alter_result = run("ALTER VIEW '" + view_path_text + "' AS SELECT title FROM '" + table_path_text + "' WHERE done = true;");
+    CHECK_EQ(alter_result.message, "Altered view '" + view_path_text + "'");
+
+    const auto view = storage->load_view({sql::RelationReference::Kind::FilePath, view_path_text});
+    CHECK(view.select_statement.find("done = true") != std::string::npos);
+
+    const auto drop_result = run("DROP VIEW '" + view_path_text + "';");
+    CHECK_EQ(drop_result.message, "Dropped view '" + view_path_text + "'");
+    CHECK_FALSE(std::filesystem::exists(view_path_text + ".view.sql"));
+}
+
 TEST_SUITE_END();
 

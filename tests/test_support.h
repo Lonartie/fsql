@@ -8,6 +8,7 @@
 #include "Tokenizer.h"
 
 #include <filesystem>
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -32,6 +33,24 @@ namespace sql_test
     {
         return std::filesystem::path(__FILE__).parent_path() / "fixtures" / name;
     }
+
+    struct TemporaryDirectory
+    {
+        std::filesystem::path path;
+
+        TemporaryDirectory()
+        {
+            path = std::filesystem::temp_directory_path()
+                / ("csv_sql_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            std::filesystem::create_directories(path);
+        }
+
+        ~TemporaryDirectory()
+        {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    };
 
     struct ExecutorContext
     {

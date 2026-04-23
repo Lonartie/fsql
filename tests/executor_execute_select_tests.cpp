@@ -180,6 +180,39 @@ TEST_CASE("select reads rows from created views")
     CHECK_EQ(result.message, "2 row(s) selected");
 }
 
+TEST_CASE("select reads rows from quoted view file paths")
+{
+    sql_test::TemporaryDirectory temp_directory;
+    std::filesystem::create_directories(temp_directory.path / "tables");
+    std::filesystem::create_directories(temp_directory.path / "views");
+
+    auto storage = std::make_shared<sql::CsvStorage>(temp_directory.path);
+    sql::Executor executor(storage);
+    const auto table_path = temp_directory.path / "tables" / "tasks";
+    const auto view_path = temp_directory.path / "views" / "open_tasks";
+    const auto table_path_text = table_path.string();
+    const auto view_path_text = view_path.string();
+
+    auto run = [&](const std::string& query)
+    {
+        const auto result = executor.execute(sql_test::parse_statement(query));
+        REQUIRE(result.success);
+        return result;
+    };
+
+    run("CREATE TABLE '" + table_path_text + "' (title, done);");
+    run("INSERT INTO '" + table_path_text + "' VALUES ('Patch release', false);");
+    run("INSERT INTO '" + table_path_text + "' VALUES ('Archive logs', true);");
+    run("CREATE VIEW '" + view_path_text + "' AS SELECT title FROM '" + table_path_text + "' WHERE done = false;");
+
+    const auto result = run("SELECT src.title FROM '" + view_path_text + "' src ORDER BY src.title;");
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "Patch release");
+    CHECK_EQ(result.message, "1 row(s) selected");
+}
+
 TEST_CASE("select reads rows from file path sources with optional csv extension")
 {
     sql_test::ExecutorContext context;

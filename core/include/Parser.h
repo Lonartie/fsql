@@ -188,6 +188,11 @@ namespace sql
         /// @return Identifier text.
         std::string expect_identifier(const std::string& message);
 
+        /// @brief Consumes and returns a table/view identifier or quoted file path.
+        /// @param message Error message if the next token is neither an identifier nor a string.
+        /// @return Parsed relation reference.
+        RelationReference expect_relation_reference(const std::string& message);
+
         /// @brief Parses a possibly qualified identifier reference such as `source.column`.
         /// @param message Error message if the next token is not an identifier.
         /// @return Identifier path.

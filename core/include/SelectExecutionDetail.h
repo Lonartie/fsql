@@ -15,7 +15,7 @@ namespace sql::detail
     bool is_aggregate_function_name(const std::string& name);
     std::string select_star_column_name(const ResolvedSelectTable& table, std::size_t index);
 
-    ExecutionTable run_view_statement(const std::string& view_name, const IStorage& storage);
+    ExecutionTable run_view_statement(const RelationReference& view_name, const IStorage& storage);
     ResolvedSelectTable materialize_select_table(const SelectStatement& stmt, const IStorage& storage, const ForkJoinScheduler* scheduler);
 
     void apply_select_modifiers(const SelectStatement& stmt, std::vector<ProjectedSelectRow>& rows);

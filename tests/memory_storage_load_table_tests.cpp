@@ -7,10 +7,10 @@ TEST_SUITE_BEGIN("MemoryStorage::load_table");
 TEST_CASE("stores and loads tables")
 {
     sql::MemoryStorage storage;
-    sql::Table table{"todos", {"title", "done"}, {{"Buy milk", "false"}}};
+    sql::Table table{"todos", std::nullopt, {"title", "done"}, {{"Buy milk", "false"}}};
 
     storage.save_table(table);
-    const auto loaded = storage.load_table("todos");
+    const auto loaded = storage.load_table({sql::RelationReference::Kind::Identifier, "todos"});
 
     CHECK_EQ(loaded.name, "todos");
     REQUIRE_EQ(loaded.columns.size(), 2U);
@@ -21,7 +21,7 @@ TEST_CASE("stores and loads tables")
 TEST_CASE("rejects missing tables")
 {
     sql::MemoryStorage storage;
-    CHECK_THROWS_AS(storage.load_table("missing"), std::runtime_error);
+    CHECK_THROWS_AS(storage.load_table({sql::RelationReference::Kind::Identifier, "missing"}), std::runtime_error);
 }
 
 TEST_SUITE_END();

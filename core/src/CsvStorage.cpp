@@ -12,6 +12,22 @@ namespace sql
 {
     namespace
     {
+        constexpr std::string_view view_suffix = ".view.sql";
+
+        bool ends_with(std::string_view text, std::string_view suffix)
+        {
+            return text.size() >= suffix.size() && text.substr(text.size() - suffix.size()) == suffix;
+        }
+
+        std::string view_logical_name_from_path(const std::filesystem::path& path)
+        {
+            const auto filename = path.filename().string();
+            if (ends_with(filename, view_suffix))
+            {
+                return filename.substr(0, filename.size() - view_suffix.size());
+            }
+            return path.stem().string();
+        }
 
         Table describe_table_from_stream(std::istream& input, const std::string& table_name)
         {
@@ -84,53 +100,101 @@ namespace sql
     {
     }
 
-    std::filesystem::path CsvStorage::table_path(const std::string& table_name) const
+    std::filesystem::path CsvStorage::rooted_path(const RelationReference& reference) const
     {
-        return root_directory_ / (table_name + ".csv");
+        auto path = std::filesystem::path(reference.name);
+        if (path.is_absolute())
+        {
+            return path;
+        }
+        return root_directory_ / path;
     }
 
-    std::filesystem::path CsvStorage::view_path(const std::string& view_name) const
+    std::filesystem::path CsvStorage::explicit_table_path(const RelationReference& table_name, bool for_write) const
     {
-        return root_directory_ / (view_name + ".view.sql");
+        auto path = rooted_path(table_name);
+        if (for_write && path.extension().empty() && !std::filesystem::exists(path))
+        {
+            path += ".csv";
+        }
+        return for_write ? path : resolve_table_source_path(std::move(path));
     }
 
-    bool CsvStorage::has_table(const std::string& table_name) const
+    std::filesystem::path CsvStorage::explicit_view_path(const RelationReference& view_name, bool for_write) const
+    {
+        auto path = rooted_path(view_name);
+        if (for_write && path.extension().empty() && !std::filesystem::exists(path))
+        {
+            path += view_suffix;
+        }
+        return for_write ? path : resolve_view_source_path(std::move(path));
+    }
+
+    std::filesystem::path CsvStorage::table_path(const RelationReference& table_name) const
+    {
+        if (table_name.kind == RelationReference::Kind::FilePath)
+        {
+            return explicit_table_path(table_name, false);
+        }
+        return root_directory_ / (table_name.name + ".csv");
+    }
+
+    std::filesystem::path CsvStorage::view_path(const RelationReference& view_name) const
+    {
+        if (view_name.kind == RelationReference::Kind::FilePath)
+        {
+            return explicit_view_path(view_name, false);
+        }
+        return root_directory_ / (view_name.name + ".view.sql");
+    }
+
+    bool CsvStorage::has_table(const RelationReference& table_name) const
     {
         return std::filesystem::exists(table_path(table_name));
     }
 
-    bool CsvStorage::has_view(const std::string& view_name) const
+    bool CsvStorage::has_view(const RelationReference& view_name) const
     {
         return std::filesystem::exists(view_path(view_name));
     }
 
-    Table CsvStorage::load_table(const std::string& table_name) const
+    Table CsvStorage::load_table(const RelationReference& table_name) const
     {
         const auto path = table_path(table_name);
         std::ifstream input(path);
         if (!input)
         {
-            fail("Table does not exist: " + table_name);
+            fail("Table does not exist: " + table_name.name);
         }
 
-        return load_table_from_stream(input, table_name);
+        auto table = load_table_from_stream(input, table_name.name);
+        if (table_name.kind == RelationReference::Kind::FilePath)
+        {
+            table.storage_path = path;
+        }
+        return table;
     }
 
-    Table CsvStorage::describe_table(const std::string& table_name) const
+    Table CsvStorage::describe_table(const RelationReference& table_name) const
     {
         const auto path = table_path(table_name);
         std::ifstream input(path);
         if (!input)
         {
-            fail("Table does not exist: " + table_name);
+            fail("Table does not exist: " + table_name.name);
         }
 
-        return describe_table_from_stream(input, table_name);
+        auto table = describe_table_from_stream(input, table_name.name);
+        if (table_name.kind == RelationReference::Kind::FilePath)
+        {
+            table.storage_path = path;
+        }
+        return table;
     }
 
-    RowGenerator CsvStorage::scan_table(const std::string& table_name) const
+    RowGenerator CsvStorage::scan_table(const RelationReference& table_name) const
     {
-        return scan_table_from_stream(table_path(table_name), table_name, "Table does not exist: " + table_name);
+        return scan_table_from_stream(table_path(table_name), table_name.name, "Table does not exist: " + table_name.name);
     }
 
     std::filesystem::path CsvStorage::resolve_table_source_path(std::filesystem::path path)
@@ -146,6 +210,19 @@ namespace sql
         return path;
     }
 
+    std::filesystem::path CsvStorage::resolve_view_source_path(std::filesystem::path path)
+    {
+        if (path.extension().empty())
+        {
+            const auto with_view_extension = path.string() + std::string(view_suffix);
+            if (!std::filesystem::exists(path) && std::filesystem::exists(with_view_extension))
+            {
+                path = with_view_extension;
+            }
+        }
+        return path;
+    }
+
     Table CsvStorage::load_table_from_path(std::filesystem::path path)
     {
         path = resolve_table_source_path(std::move(path));
@@ -155,7 +232,9 @@ namespace sql
             fail("Table file does not exist: " + path.string());
         }
 
-        return load_table_from_stream(input, path.stem().string());
+        auto table = load_table_from_stream(input, path.stem().string());
+        table.storage_path = path;
+        return table;
     }
 
     Table CsvStorage::describe_table_from_path(std::filesystem::path path)
@@ -167,7 +246,9 @@ namespace sql
             fail("Table file does not exist: " + path.string());
         }
 
-        return describe_table_from_stream(input, path.stem().string());
+        auto table = describe_table_from_stream(input, path.stem().string());
+        table.storage_path = path;
+        return table;
     }
 
     RowGenerator CsvStorage::scan_table_from_path(std::filesystem::path path)
@@ -176,13 +257,13 @@ namespace sql
         return scan_table_from_stream(path, path.stem().string(), "Table file does not exist: " + path.string());
     }
 
-    ViewDefinition CsvStorage::load_view(const std::string& view_name) const
+    ViewDefinition CsvStorage::load_view(const RelationReference& view_name) const
     {
         const auto path = view_path(view_name);
         std::ifstream input(path);
         if (!input)
         {
-            fail("View does not exist: " + view_name);
+            fail("View does not exist: " + view_name.name);
         }
 
         std::ostringstream buffer;
@@ -190,20 +271,59 @@ namespace sql
         const auto query = buffer.str();
         if (query.empty())
         {
-            fail("View is empty or invalid: " + view_name);
+            fail("View is empty or invalid: " + view_name.name);
         }
 
-        return {view_name, query};
+        ViewDefinition view;
+        view.name = view_name.name;
+        view.select_statement = query;
+        if (view_name.kind == RelationReference::Kind::FilePath)
+        {
+            view.storage_path = path;
+        }
+        return view;
+    }
+
+    ViewDefinition CsvStorage::load_view_from_path(std::filesystem::path path)
+    {
+        path = resolve_view_source_path(std::move(path));
+        std::ifstream input(path);
+        if (!input)
+        {
+            fail("View file does not exist: " + path.string());
+        }
+
+        std::ostringstream buffer;
+        buffer << input.rdbuf();
+        const auto query = buffer.str();
+        if (query.empty())
+        {
+            fail("View is empty or invalid: " + path.string());
+        }
+
+        ViewDefinition view;
+        view.name = view_logical_name_from_path(path);
+        view.storage_path = path;
+        view.select_statement = query;
+        return view;
     }
 
     void CsvStorage::save_table(const Table& table)
     {
-        if (has_view(table.name))
+        const bool uses_explicit_path = table.storage_path.has_value();
+        if (!uses_explicit_path)
         {
-            fail("View already exists: " + table.name);
+            RelationReference reference;
+            reference.name = table.name;
+            if (has_view(reference))
+            {
+                fail("View already exists: " + table.name);
+            }
         }
 
-        const auto path = table_path(table.name);
+        const auto path = uses_explicit_path
+            ? explicit_table_path({RelationReference::Kind::FilePath, table.storage_path->string()}, true)
+            : table_path({RelationReference::Kind::Identifier, table.name});
         std::ofstream output(path, std::ios::trunc);
         if (!output)
         {
@@ -236,12 +356,20 @@ namespace sql
 
     void CsvStorage::save_view(const ViewDefinition& view)
     {
-        if (has_table(view.name))
+        const bool uses_explicit_path = view.storage_path.has_value();
+        if (!uses_explicit_path)
         {
-            fail("Table already exists: " + view.name);
+            RelationReference reference;
+            reference.name = view.name;
+            if (has_table(reference))
+            {
+                fail("Table already exists: " + view.name);
+            }
         }
 
-        const auto path = view_path(view.name);
+        const auto path = uses_explicit_path
+            ? explicit_view_path({RelationReference::Kind::FilePath, view.storage_path->string()}, true)
+            : view_path({RelationReference::Kind::Identifier, view.name});
         std::ofstream output(path, std::ios::trunc);
         if (!output)
         {
@@ -251,31 +379,31 @@ namespace sql
         output << view.select_statement;
     }
 
-    void CsvStorage::delete_table(const std::string& table_name)
+    void CsvStorage::delete_table(const RelationReference& table_name)
     {
         const auto path = table_path(table_name);
         if (!std::filesystem::exists(path))
         {
-            fail("Table does not exist: " + table_name);
+            fail("Table does not exist: " + table_name.name);
         }
 
         if (!std::filesystem::remove(path))
         {
-            fail("Unable to delete table: " + table_name);
+            fail("Unable to delete table: " + table_name.name);
         }
     }
 
-    void CsvStorage::delete_view(const std::string& view_name)
+    void CsvStorage::delete_view(const RelationReference& view_name)
     {
         const auto path = view_path(view_name);
         if (!std::filesystem::exists(path))
         {
-            fail("View does not exist: " + view_name);
+            fail("View does not exist: " + view_name.name);
         }
 
         if (!std::filesystem::remove(path))
         {
-            fail("Unable to delete view: " + view_name);
+            fail("Unable to delete view: " + view_name.name);
         }
     }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,6 +16,9 @@ namespace sql
         /// @brief Logical table name without the `.csv` extension.
         std::string name;
 
+        /// @brief Optional backing file path used for path-addressed tables.
+        std::optional<std::filesystem::path> storage_path;
+
         /// @brief Ordered list of column names.
         std::vector<std::string> columns;
 
@@ -26,6 +31,9 @@ namespace sql
     {
         /// @brief Logical view name.
         std::string name;
+
+        /// @brief Optional backing file path used for path-addressed views.
+        std::optional<std::filesystem::path> storage_path;
 
         /// @brief Serialized `SELECT` statement backing the view.
         std::string select_statement;

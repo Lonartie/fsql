@@ -6,6 +6,9 @@
   - INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL OUTER JOIN
   - Table aliases in FROM and JOIN clauses
   - Complex join conditions with AND/OR
+- AS for column aliases in SELECT list
+- Make WHERE syntax consistent across different query forms (e.g. support WHERE in UPDATE, DELETE, SELECT)
+  - They should work the same way in all contexts, not just SELECT
 - UNION, UNION ALL, INTERSECT, EXCEPT
 - Further NULL semantics alignment beyond the basic literal/predicate support
 - Further align operator semantics with SQL standard beyond the implemented keyword operators

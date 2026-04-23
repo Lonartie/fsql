@@ -123,6 +123,20 @@ namespace sql
         ExpressionPtr default_value;
     };
 
+    /// @brief Represents a table or view reference used by parsed statements.
+    struct RelationReference
+    {
+        /// @brief Supported relation reference kinds.
+        enum class Kind
+        {
+            Identifier,
+            FilePath
+        } kind = Kind::Identifier;
+
+        /// @brief Logical identifier text or explicit file path.
+        std::string name;
+    };
+
     /// @brief Parsed `CREATE TABLE` or `CREATE VIEW` statement.
     struct CreateStatement
     {
@@ -130,7 +144,7 @@ namespace sql
         SchemaObjectKind object_kind = SchemaObjectKind::Table;
 
         /// @brief Target table or view name.
-        std::string table_name;
+        RelationReference table_name;
 
         /// @brief Declared columns and attributes for table creation.
         std::vector<ColumnDefinition> columns;
@@ -146,14 +160,14 @@ namespace sql
         SchemaObjectKind object_kind = SchemaObjectKind::Table;
 
         /// @brief Target table or view name.
-        std::string table_name;
+        RelationReference table_name;
     };
 
     /// @brief Parsed `DELETE FROM` statement.
     struct DeleteStatement
     {
         /// @brief Target table name.
-        std::string table_name;
+        RelationReference table_name;
 
         /// @brief Optional filter expression.
         ExpressionPtr where;
@@ -163,7 +177,7 @@ namespace sql
     struct InsertStatement
     {
         /// @brief Target table name.
-        std::string table_name;
+        RelationReference table_name;
 
         /// @brief Optional explicit target columns.
         std::optional<std::vector<std::string>> columns;
@@ -241,7 +255,7 @@ namespace sql
     struct UpdateStatement
     {
         /// @brief Target table name.
-        std::string table_name;
+        RelationReference table_name;
 
         /// @brief Column/value assignments.
         std::vector<std::pair<std::string, ExpressionPtr>> assignments;
@@ -270,7 +284,7 @@ namespace sql
         SchemaObjectKind object_kind = SchemaObjectKind::Table;
 
         /// @brief Target table or view name.
-        std::string table_name;
+        RelationReference table_name;
 
         /// @brief Requested alter action.
         AlterAction action = AlterAction::AddColumn;

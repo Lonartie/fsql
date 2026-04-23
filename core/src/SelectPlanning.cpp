@@ -28,6 +28,16 @@ namespace sql::detail
     {
         thread_local std::vector<std::string> active_view_stack;
 
+        std::string default_path_source_name(const std::string& path_text)
+        {
+            const auto filename = std::filesystem::path(path_text).filename().string();
+            if (filename.size() > 9 && filename.ends_with(".view.sql"))
+            {
+                return filename.substr(0, filename.size() - 9);
+            }
+            return std::filesystem::path(path_text).stem().string();
+        }
+
         bool has_active_view(const std::string& view_name)
         {
             return std::any_of(active_view_stack.begin(), active_view_stack.end(), [&](const auto& active_name)
@@ -95,7 +105,7 @@ namespace sql::detail
         {
             if (source.kind == SelectSource::Kind::FilePath)
             {
-                return CsvStorage::resolve_table_source_path(source.name).stem().string();
+                return default_path_source_name(source.name);
             }
             return source.name;
         }
@@ -105,8 +115,40 @@ namespace sql::detail
             SelectSourcePlan materialized;
             if (source.kind == SelectSource::Kind::FilePath)
             {
-                const auto table = CsvStorage::describe_table_from_path(source.name);
                 materialized.source_name = source.alias.value_or(default_select_source_name(source));
+                if (const auto* csv_storage = dynamic_cast<const CsvStorage*>(&storage))
+                {
+                    RelationReference reference;
+                    reference.kind = RelationReference::Kind::FilePath;
+                    reference.name = source.name;
+                    const bool has_table = csv_storage->has_table(reference);
+                    const bool has_view = csv_storage->has_view(reference);
+                    if (has_table && has_view)
+                    {
+                        fail("Name collision between table and view: " + source.name);
+                    }
+                    if (has_view)
+                    {
+                        const auto result = run_view_statement(reference, storage);
+                        materialized.column_names = result.column_names;
+                        materialized.rows = result.rows;
+                        return materialized;
+                    }
+
+                    const auto table = csv_storage->describe_table(reference);
+                    materialized.column_names.reserve(table.columns.size());
+                    for (const auto& column : table.columns)
+                    {
+                        materialized.column_names.push_back(visible_column_name(column));
+                    }
+                    materialized.rows = [storage_ptr = &storage, reference]()
+                    {
+                        return storage_ptr->scan_table(reference);
+                    };
+                    return materialized;
+                }
+
+                const auto table = CsvStorage::describe_table_from_path(source.name);
                 materialized.column_names.reserve(table.columns.size());
                 for (const auto& column : table.columns)
                 {
@@ -121,8 +163,9 @@ namespace sql::detail
 
             if (source.kind == SelectSource::Kind::Table)
             {
-                const bool has_table = storage.has_table(source.name);
-                const bool has_view = storage.has_view(source.name);
+                const RelationReference reference{RelationReference::Kind::Identifier, source.name};
+                const bool has_table = storage.has_table(reference);
+                const bool has_view = storage.has_view(reference);
                 if (has_table && has_view)
                 {
                     fail("Name collision between table and view: " + source.name);
@@ -131,21 +174,21 @@ namespace sql::detail
                 materialized.source_name = source.alias.value_or(default_select_source_name(source));
                 if (has_view)
                 {
-                    const auto result = run_view_statement(source.name, storage);
+                    const auto result = run_view_statement(reference, storage);
                     materialized.column_names = result.column_names;
                     materialized.rows = result.rows;
                     return materialized;
                 }
 
-                const Table table = storage.describe_table(source.name);
+                const Table table = storage.describe_table(reference);
                 materialized.column_names.reserve(table.columns.size());
                 for (const auto& column : table.columns)
                 {
                     materialized.column_names.push_back(visible_column_name(column));
                 }
-                materialized.rows = [storage_ptr = &storage, table_name = source.name]()
+                materialized.rows = [storage_ptr = &storage, reference]()
                 {
-                    return storage_ptr->scan_table(table_name);
+                    return storage_ptr->scan_table(reference);
                 };
                 return materialized;
             }
@@ -170,19 +213,23 @@ namespace sql::detail
         {
             if (source.kind == SelectSource::Kind::FilePath)
             {
+                if (const auto* csv_storage = dynamic_cast<const CsvStorage*>(&storage))
+                {
+                    return !csv_storage->has_view({RelationReference::Kind::FilePath, source.name});
+                }
                 return true;
             }
             if (source.kind != SelectSource::Kind::Table)
             {
                 return false;
             }
-            return !storage.has_view(source.name);
+            return !storage.has_view({RelationReference::Kind::Identifier, source.name});
         }
     }
 
-    ExecutionTable run_view_statement(const std::string& view_name, const IStorage& storage)
+    ExecutionTable run_view_statement(const RelationReference& view_name, const IStorage& storage)
     {
-        ActiveViewGuard guard(view_name);
+        ActiveViewGuard guard(view_name.name);
         return run_select_statement(parse_view_statement(storage.load_view(view_name)), storage);
     }
 
@@ -252,7 +299,7 @@ namespace sql::detail
 
 namespace sql
 {
-    void validate_view_definition(const std::string& view_name, const IStorage& storage, const ICoroExecutor& coro_executor)
+    void validate_view_definition(const RelationReference& view_name, const IStorage& storage, const ICoroExecutor& coro_executor)
     {
         const auto result = detail::run_view_statement(view_name, storage);
         coro_executor.drive_rows(result.rows(), [](const Row& row)

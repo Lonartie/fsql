@@ -54,6 +54,23 @@ namespace sql
         return advance().text;
     }
 
+    RelationReference Parser::expect_relation_reference(const std::string& message)
+    {
+        RelationReference reference;
+        if (check(TokenType::Identifier))
+        {
+            reference.name = advance().text;
+            return reference;
+        }
+        if (check(TokenType::String))
+        {
+            reference.kind = RelationReference::Kind::FilePath;
+            reference.name = advance().text;
+            return reference;
+        }
+        fail(message);
+    }
+
     std::string Parser::parse_identifier_reference(const std::string& message)
     {
         std::string identifier = expect_identifier(message);

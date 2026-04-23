@@ -1,10 +1,10 @@
 # csv_sql
 
-> A compact C++ SQL-like engine for CSV-backed data, designed to work both as a standalone CLI tool and as an embeddable library.
+> A compact, AI-built C++ SQL-like engine for CSV-backed data, designed to work both as a standalone CLI tool and as an embeddable library.
 
 `csv_sql` is a small but ambitious C++20 project that parses and executes a focused SQL-like dialect over CSV files and in-memory tables. It exposes a reusable core library (`sql_core`), a command-line application (`sql`), command wrappers such as `select` and `insert`, and an automated doctest suite.
 
-It is intentionally opinionated: it aims to be understandable, hackable, and embeddable rather than fully SQL-compatible.
+It is intentionally opinionated: it aims to be understandable and embeddable rather than fully SQL-compatible.
 
 ---
 
@@ -106,7 +106,7 @@ The currently implemented feature set includes:
 - Multi-source `SELECT`:
   - comma-separated sources in `FROM`
   - subquery sources in `FROM`
-  - file-path sources in `FROM`, e.g. `SELECT * FROM '/tmp/tasks.csv'`
+  - file-path sources and targets wherever table/view names are accepted
   - qualified columns such as `tasks.title`
 - Streamed execution:
   - coroutine row/value generators
@@ -134,7 +134,7 @@ Some syntax is SQL-inspired, but not identical to mainstream engines. For exampl
 
 - column defaults currently use **`column = expression`** in `CREATE TABLE`, not standard SQL `DEFAULT expression`
 - multi-source queries are currently expressed with **comma-separated `FROM` sources**, not `JOIN` syntax
-- file paths can be used directly as sources in `SELECT`
+- quoted file paths can be used anywhere the dialect expects a table or view name
 - some operators and behaviors are deliberately simplified
 
 If you want exact SQL compatibility, this project is the wrong tool.
@@ -244,13 +244,20 @@ This is convenient when you are repeatedly working with a single statement famil
 
 ### 4.5 Working with CSV files directly
 
-One of the most unusual and useful features is direct file-path `SELECT` sources.
+Quoted file paths can be used anywhere the dialect would normally accept a table or view identifier.
+That includes `CREATE TABLE`, `CREATE VIEW`, `INSERT INTO`, `UPDATE`, `DELETE FROM`, `DROP TABLE`, `DROP VIEW`, and `SELECT ... FROM ...`.
 
 ```sh
+./build/sql/sql "CREATE TABLE '/tmp/tasks' (id AUTO_INCREMENT, title, done = false);"
+./build/sql/sql "INSERT INTO '/tmp/tasks' (title) VALUES ('Write README');"
 ./build/sql/sql "SELECT src.title FROM '/tmp/tasks.csv' src WHERE src.done = false ORDER BY src.title;"
+./build/sql/sql "CREATE VIEW '/tmp/open_tasks' AS SELECT title FROM '/tmp/tasks' WHERE done = false;"
+./build/sql/sql "SELECT * FROM '/tmp/open_tasks';"
 ```
 
-The `.csv` extension is optional if the file exists with that extension.
+For table files, the `.csv` extension is optional when it can be resolved correctly.
+For view files, the `.view.sql` suffix is optional when it can be resolved correctly.
+Relative quoted paths are resolved from the active `CsvStorage` root, which for the CLI is the current working directory.
 
 ### 4.6 How CLI persistence works
 
@@ -535,14 +542,25 @@ Aliases are supported for subquery sources and are usually the clearest choice w
 
 #### File path sources
 
-You can read directly from CSV files by quoting the path:
+You can quote a path anywhere a table or view name would normally appear.
+In `FROM`, that means a quoted path may resolve to either a CSV table file or a persisted `.view.sql` file.
 
 ```sql
+CREATE TABLE '/tmp/tasks' (id AUTO_INCREMENT, title, done = false);
+INSERT INTO '/tmp/tasks' (title) VALUES ('Patch release');
 SELECT src.title FROM '/tmp/tasks.csv' src;
 SELECT * FROM '/tmp/tasks';
+CREATE VIEW '/tmp/open_tasks' AS SELECT title FROM '/tmp/tasks' WHERE done = false;
+SELECT * FROM '/tmp/open_tasks';
+UPDATE '/tmp/tasks' SET done = true WHERE title = 'Patch release';
+DELETE FROM '/tmp/tasks' WHERE done = true;
+DROP VIEW '/tmp/open_tasks';
+DROP TABLE '/tmp/tasks';
 ```
 
-The `.csv` extension may be omitted when the file resolves correctly.
+Table paths may omit `.csv` when resolution is unambiguous.
+View paths may omit `.view.sql` when resolution is unambiguous.
+If both a table file and a view file match the same quoted path, the reference is ambiguous and execution fails.
 
 ### 6.4 Expressions and operators
 
