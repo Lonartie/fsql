@@ -4,6 +4,7 @@
 #include "SerialCoroExecutor.h"
 #include "SqlError.h"
 #include "SqlSerialization.h"
+#include "StringUtils.h"
 
 namespace sql
 {
@@ -69,11 +70,18 @@ namespace sql
             }) > 0;
         }
 
-        EvaluatedValue evaluate_in_subquery(const EvaluatedValue& left, const ExpressionPtr& right, const IStorage& storage)
+        EvaluatedValue evaluate_in_subquery(const EvaluatedValue& left,
+                                            const ExpressionPtr& right,
+                                            const IStorage& storage,
+                                            bool negated = false)
         {
-            if (!right || right->kind != ExpressionKind::Select || !right->select)
+            if (!right)
             {
-                fail("IN currently requires a SELECT subquery");
+                fail("IN requires a SELECT subquery or inline list");
+            }
+            if (right->kind != ExpressionKind::Select || !right->select)
+            {
+                fail("IN requires a SELECT subquery or inline list");
             }
 
             const auto result = run_select_statement(*right->select, storage);
@@ -101,7 +109,26 @@ namespace sql
                 }
                 return true;
             });
-            return make_numeric(found_match ? 1.0 : 0.0);
+            return make_numeric(found_match != negated ? 1.0 : 0.0);
+        }
+
+        EvaluatedValue evaluate_in_values(const EvaluatedValue& left,
+                                          const std::vector<EvaluatedValue>& values,
+                                          bool negated = false)
+        {
+            if (left.is_null)
+            {
+                return make_numeric(0.0);
+            }
+
+            for (const auto& candidate : values)
+            {
+                if (!candidate.is_null && compare_values(left, candidate) == 0)
+                {
+                    return make_numeric(negated ? 0.0 : 1.0);
+                }
+            }
+            return make_numeric(negated ? 1.0 : 0.0);
         }
 
         EvaluatedValue evaluate_quantified_subquery(const EvaluatedValue& left,
@@ -207,6 +234,38 @@ namespace sql
             }
             return make_text(row[*resolved_index]);
         }
+
+        EvaluatedValue evaluate_table_identifier(const std::string& identifier, const Table& table, const Row& row, const IStorage& storage)
+        {
+            const auto dot = identifier.find('.');
+            if (dot == std::string::npos)
+            {
+                try
+                {
+                    return make_text(row[storage.column_index(table, identifier)]);
+                }
+                catch (const std::runtime_error&)
+                {
+                    return make_text(identifier);
+                }
+            }
+
+            const auto source_name = identifier.substr(0, dot);
+            const auto column_name = identifier.substr(dot + 1);
+            if (!iequals(source_name, table.name))
+            {
+                fail("Unknown column '" + identifier + "' in table '" + table.name + "'");
+            }
+
+            try
+            {
+                return make_text(row[storage.column_index(table, column_name)]);
+            }
+            catch (const std::runtime_error&)
+            {
+                fail("Unknown column '" + identifier + "' in table '" + table.name + "'");
+            }
+        }
     }
 
     std::size_t resolve_select_column_index(const ResolvedSelectTable& table, const std::string& identifier)
@@ -259,6 +318,8 @@ namespace sql
             return make_null();
         case ExpressionKind::Identifier:
             return evaluate_select_identifier(expression->text, table, row);
+        case ExpressionKind::List:
+            fail("Inline expression lists can only be used with IN");
         case ExpressionKind::Select:
             if (!expression->select) fail("Missing SELECT expression payload");
             return evaluate_select_expression(*expression->select, storage);
@@ -274,9 +335,20 @@ namespace sql
             {
                 return evaluate_quantified_subquery(evaluate_select_row_expression(expression->left, table, row, storage), expression->binary_operator, expression->subquery_quantifier, expression->right, storage);
             }
-            if (expression->binary_operator == BinaryOperator::In)
+            if (expression->binary_operator == BinaryOperator::In || expression->binary_operator == BinaryOperator::NotIn)
             {
-                return evaluate_in_subquery(evaluate_select_row_expression(expression->left, table, row, storage), expression->right, storage);
+                const bool negated = expression->binary_operator == BinaryOperator::NotIn;
+                if (expression->right && expression->right->kind == ExpressionKind::List)
+                {
+                    std::vector<EvaluatedValue> values;
+                    values.reserve(expression->right->arguments.size());
+                    for (const auto& item : expression->right->arguments)
+                    {
+                        values.push_back(evaluate_select_row_expression(item, table, row, storage));
+                    }
+                    return evaluate_in_values(evaluate_select_row_expression(expression->left, table, row, storage), values, negated);
+                }
+                return evaluate_in_subquery(evaluate_select_row_expression(expression->left, table, row, storage), expression->right, storage, negated);
             }
             return apply_binary_operator(expression->binary_operator,
                                          evaluate_select_row_expression(expression->left, table, row, storage),
@@ -299,6 +371,8 @@ namespace sql
             return make_null();
         case ExpressionKind::Identifier:
             return evaluate_select_identifier(expression->text, table, group.representative_row);
+        case ExpressionKind::List:
+            fail("Inline expression lists can only be used with IN");
         case ExpressionKind::Select:
             if (!expression->select) fail("Missing SELECT expression payload");
             return evaluate_select_expression(*expression->select, storage);
@@ -332,9 +406,20 @@ namespace sql
             {
                 return evaluate_quantified_subquery(evaluate_grouped_expression(expression->left, table, group, storage), expression->binary_operator, expression->subquery_quantifier, expression->right, storage);
             }
-            if (expression->binary_operator == BinaryOperator::In)
+            if (expression->binary_operator == BinaryOperator::In || expression->binary_operator == BinaryOperator::NotIn)
             {
-                return evaluate_in_subquery(evaluate_grouped_expression(expression->left, table, group, storage), expression->right, storage);
+                const bool negated = expression->binary_operator == BinaryOperator::NotIn;
+                if (expression->right && expression->right->kind == ExpressionKind::List)
+                {
+                    std::vector<EvaluatedValue> values;
+                    values.reserve(expression->right->arguments.size());
+                    for (const auto& item : expression->right->arguments)
+                    {
+                        values.push_back(evaluate_grouped_expression(item, table, group, storage));
+                    }
+                    return evaluate_in_values(evaluate_grouped_expression(expression->left, table, group, storage), values, negated);
+                }
+                return evaluate_in_subquery(evaluate_grouped_expression(expression->left, table, group, storage), expression->right, storage, negated);
             }
             return apply_binary_operator(expression->binary_operator,
                                          evaluate_grouped_expression(expression->left, table, group, storage),
@@ -356,14 +441,9 @@ namespace sql
         case ExpressionKind::Null:
             return make_null();
         case ExpressionKind::Identifier:
-            try
-            {
-                return make_text(row[storage.column_index(table, expression->text)]);
-            }
-            catch (const std::runtime_error&)
-            {
-                return make_text(expression->text);
-            }
+            return evaluate_table_identifier(expression->text, table, row, storage);
+        case ExpressionKind::List:
+            fail("Inline expression lists can only be used with IN");
         case ExpressionKind::Select:
             if (!expression->select) fail("Missing SELECT expression payload");
             return evaluate_select_expression(*expression->select, storage);
@@ -379,9 +459,20 @@ namespace sql
             {
                 return evaluate_quantified_subquery(evaluate_expression(expression->left, table, row, storage), expression->binary_operator, expression->subquery_quantifier, expression->right, storage);
             }
-            if (expression->binary_operator == BinaryOperator::In)
+            if (expression->binary_operator == BinaryOperator::In || expression->binary_operator == BinaryOperator::NotIn)
             {
-                return evaluate_in_subquery(evaluate_expression(expression->left, table, row, storage), expression->right, storage);
+                const bool negated = expression->binary_operator == BinaryOperator::NotIn;
+                if (expression->right && expression->right->kind == ExpressionKind::List)
+                {
+                    std::vector<EvaluatedValue> values;
+                    values.reserve(expression->right->arguments.size());
+                    for (const auto& item : expression->right->arguments)
+                    {
+                        values.push_back(evaluate_expression(item, table, row, storage));
+                    }
+                    return evaluate_in_values(evaluate_expression(expression->left, table, row, storage), values, negated);
+                }
+                return evaluate_in_subquery(evaluate_expression(expression->left, table, row, storage), expression->right, storage, negated);
             }
             return apply_binary_operator(expression->binary_operator,
                                          evaluate_expression(expression->left, table, row, storage),

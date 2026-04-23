@@ -159,6 +159,21 @@ namespace sql
             return "NULL";
         case ExpressionKind::Identifier:
             return expression->text;
+        case ExpressionKind::List:
+        {
+            std::ostringstream stream;
+            stream << '(';
+            for (std::size_t i = 0; i < expression->arguments.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    stream << ", ";
+                }
+                stream << serialize_expression(expression->arguments[i]);
+            }
+            stream << ')';
+            return stream.str();
+        }
         case ExpressionKind::Select:
             if (!expression->select)
             {
@@ -222,6 +237,7 @@ namespace sql
             case BinaryOperator::Is: op = "IS"; break;
             case BinaryOperator::IsNot: op = "IS NOT"; break;
             case BinaryOperator::In: op = "IN"; break;
+            case BinaryOperator::NotIn: op = "NOT IN"; break;
             case BinaryOperator::Like: op = "LIKE"; break;
             case BinaryOperator::Regexp: op = "REGEXP"; break;
             case BinaryOperator::Equal: op = "="; break;
@@ -241,6 +257,11 @@ namespace sql
                 }
                 const auto quantifier = expression->subquery_quantifier == SubqueryQuantifier::Any ? "ANY" : "ALL";
                 return "(" + serialize_expression(expression->left) + " " + op + " " + quantifier + " " + serialize_expression(expression->right) + ")";
+            }
+            if ((expression->binary_operator == BinaryOperator::In || expression->binary_operator == BinaryOperator::NotIn)
+                && expression->right && expression->right->kind == ExpressionKind::List)
+            {
+                return "(" + serialize_expression(expression->left) + " " + op + " " + serialize_expression(expression->right) + ")";
             }
             return "(" + serialize_expression(expression->left) + " " + op + " " + serialize_expression(expression->right) + ")";
         }

@@ -190,13 +190,39 @@ namespace sql
             else if (match_keyword("IN"))
             {
                 expect(TokenType::LParen, "Expected '(' after IN");
-                if (!match_keyword("SELECT"))
+                if (match_keyword("SELECT"))
                 {
-                    fail("IN currently requires a SELECT subquery");
+                    auto statement = parse_select_statement();
+                    expect(TokenType::RParen, "Expected ')' after IN subquery");
+                    expression = make_binary(BinaryOperator::In, expression, make_select(std::move(statement)));
                 }
-                auto statement = parse_select_statement();
-                expect(TokenType::RParen, "Expected ')' after IN subquery");
-                expression = make_binary(BinaryOperator::In, expression, make_select(std::move(statement)));
+                else
+                {
+                    auto items = parse_expression_list();
+                    expect(TokenType::RParen, "Expected ')' after IN list");
+                    expression = make_binary(BinaryOperator::In, expression, make_list(std::move(items)));
+                }
+            }
+            else if (match_keyword("NOT"))
+            {
+                if (!match_keyword("IN"))
+                {
+                    fail("Expected IN after NOT");
+                }
+
+                expect(TokenType::LParen, "Expected '(' after NOT IN");
+                if (match_keyword("SELECT"))
+                {
+                    auto statement = parse_select_statement();
+                    expect(TokenType::RParen, "Expected ')' after NOT IN subquery");
+                    expression = make_binary(BinaryOperator::NotIn, expression, make_select(std::move(statement)));
+                }
+                else
+                {
+                    auto items = parse_expression_list();
+                    expect(TokenType::RParen, "Expected ')' after NOT IN list");
+                    expression = make_binary(BinaryOperator::NotIn, expression, make_list(std::move(items)));
+                }
             }
             else if (match_keyword("BETWEEN"))
             {
@@ -386,6 +412,14 @@ namespace sql
         auto expression = std::make_shared<Expression>();
         expression->kind = ExpressionKind::Select;
         expression->select = std::make_shared<SelectStatement>(std::move(statement));
+        return expression;
+    }
+
+    ExpressionPtr Parser::make_list(std::vector<ExpressionPtr> arguments) const
+    {
+        auto expression = std::make_shared<Expression>();
+        expression->kind = ExpressionKind::List;
+        expression->arguments = std::move(arguments);
         return expression;
     }
 

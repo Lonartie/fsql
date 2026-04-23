@@ -1,14 +1,13 @@
 # Features
 
 ## Planned
+- Aggregate function evaluation order fix: they need to apply after distinct, limit, WHERE and such
 - Align default value syntax with SQL standard (e.g. DEFAULT 'value' instead of = 'value')
 - JOINs, ALIAS, and more complex multi-table queries:
   - INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL OUTER JOIN
   - Table aliases in FROM and JOIN clauses
   - Complex join conditions with AND/OR
 - AS for column aliases in SELECT list
-- Make WHERE syntax consistent across different query forms (e.g. support WHERE in UPDATE, DELETE, SELECT)
-  - They should work the same way in all contexts, not just SELECT
 - UNION, UNION ALL, INTERSECT, EXCEPT
 - Further NULL semantics alignment beyond the basic literal/predicate support
 - Further align operator semantics with SQL standard beyond the implemented keyword operators
@@ -68,6 +67,10 @@
 - Predicate subqueries in expressions:
   - EXISTS (SELECT ...)
   - IN (SELECT ...)
+  - NOT IN (SELECT ...)
+- Inline list predicates in expressions:
+  - `IN (...)` with comma-separated inline values / expressions
+  - `NOT IN (...)` with comma-separated inline values / expressions
 - Quantified predicate subqueries:
   - = ANY (SELECT ...)
   - <, <=, >, >=, != with ANY/ALL
@@ -75,6 +78,9 @@
   - NULL literal
   - IS NULL
   - IS NOT NULL
+- WHERE predicate parity across row-filtering statements:
+  - Shared WHERE expression support across `SELECT`, `UPDATE`, and `DELETE`
+  - Qualified target-column references such as `tasks.done` in single-table `UPDATE` / `DELETE`
 - ALTER TABLE command:
   - ADD COLUMN
   - DROP COLUMN

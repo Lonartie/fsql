@@ -152,6 +152,11 @@ namespace sql
         /// @return Expression node.
         ExpressionPtr make_select(SelectStatement statement) const;
 
+        /// @brief Creates an inline expression-list node.
+        /// @param arguments List items.
+        /// @return Expression node.
+        ExpressionPtr make_list(std::vector<ExpressionPtr> arguments) const;
+
         /// @brief Creates an EXISTS expression node.
         /// @param statement Nested select statement.
         /// @return Expression node.

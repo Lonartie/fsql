@@ -123,6 +123,12 @@ namespace sql::detail
                     collect_aggregate_definitions_from_expression(argument, definitions);
                 }
                 return;
+            case ExpressionKind::List:
+                for (const auto& argument : expression->arguments)
+                {
+                    collect_aggregate_definitions_from_expression(argument, definitions);
+                }
+                return;
             case ExpressionKind::Unary:
                 collect_aggregate_definitions_from_expression(expression->left, definitions);
                 return;
@@ -178,6 +184,12 @@ namespace sql::detail
             return;
         case ExpressionKind::Exists:
             return;
+        case ExpressionKind::List:
+            for (const auto& argument : expression->arguments)
+            {
+                validate_select_projection(argument, table);
+            }
+            return;
         case ExpressionKind::FunctionCall:
             for (const auto& argument : expression->arguments)
             {
@@ -227,6 +239,12 @@ namespace sql::detail
         case ExpressionKind::Null:
         case ExpressionKind::Exists:
         case ExpressionKind::Select:
+            return;
+        case ExpressionKind::List:
+            for (const auto& argument : expression->arguments)
+            {
+                validate_grouped_expression(argument, table, group_by_identifiers, inside_aggregate);
+            }
             return;
         case ExpressionKind::Identifier:
         {

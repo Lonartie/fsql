@@ -507,6 +507,17 @@ Example:
 SELECT tasks.title, teams.name FROM tasks, teams WHERE tasks.team_id = teams.id;
 ```
 
+The same expression grammar is used in `WHERE` clauses for `SELECT`, `UPDATE`, and `DELETE`.
+That means you can reuse predicates such as:
+
+```sql
+SELECT title FROM tasks WHERE tasks.done = false;
+UPDATE tasks SET done = true WHERE tasks.done = false;
+DELETE FROM tasks WHERE tasks.done = true;
+```
+
+In single-table `UPDATE` and `DELETE`, qualified references use the target table name because those statements do not currently support table aliases.
+
 ### 6.3 SELECT sources
 
 `SELECT` sources are more flexible than in many minimal SQL toys.
@@ -565,6 +576,8 @@ If both a table file and a view file match the same quoted path, the reference i
 ### 6.4 Expressions and operators
 
 Supported expression categories include:
+
+These expression forms are shared across row-filtering `WHERE` clauses in `SELECT`, `UPDATE`, and `DELETE`, and they also work inside subqueries used by those clauses.
 
 #### Arithmetic
 

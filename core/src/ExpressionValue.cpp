@@ -204,7 +204,8 @@ namespace sql
         case BinaryOperator::IsNot:
             return make_numeric((left.is_null && right.is_null) ? 0.0 : 1.0);
         case BinaryOperator::In:
-            fail("IN subqueries require dedicated evaluation");
+        case BinaryOperator::NotIn:
+            fail("IN and NOT IN require dedicated evaluation");
         case BinaryOperator::Like:
             if (left.is_null || right.is_null) return make_numeric(0.0);
             return make_numeric(like_matches(left.text, right.text) ? 1.0 : 0.0);
@@ -259,6 +260,15 @@ namespace sql
             {
                 return true;
             }
+            for (const auto& argument : expression->arguments)
+            {
+                if (contains_aggregate_function(argument))
+                {
+                    return true;
+                }
+            }
+            return false;
+        case ExpressionKind::List:
             for (const auto& argument : expression->arguments)
             {
                 if (contains_aggregate_function(argument))

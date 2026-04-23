@@ -190,6 +190,64 @@ TEST_CASE("supports IN subquery predicates in WHERE expressions")
     CHECK_EQ(result.message, "2 row(s) selected");
 }
 
+TEST_CASE("supports inline IN list predicates in WHERE expressions")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id, status);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10, 'open');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 20, 'queued');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Rotate keys', 30, 'closed');"));
+
+    const auto result = context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE team_id IN (10, 30) AND status IN ('open', 'closed') ORDER BY title;"));
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 2U);
+    CHECK_EQ(table.rows[0][0], "Patch release");
+    CHECK_EQ(table.rows[1][0], "Rotate keys");
+    CHECK_EQ(result.message, "2 row(s) selected");
+}
+
+TEST_CASE("supports NOT IN subquery predicates in WHERE expressions")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 20);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Rotate keys', 30);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (30, 'sec');"));
+
+    const auto result = context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE team_id NOT IN (SELECT id FROM teams WHERE name = 'ops' OR name = 'sec') ORDER BY title;"));
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "Write docs");
+    CHECK_EQ(result.message, "1 row(s) selected");
+}
+
+TEST_CASE("supports NOT IN list predicates in WHERE expressions")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id, status);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10, 'open');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 20, 'queued');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Rotate keys', 30, 'closed');"));
+
+    const auto result = context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE team_id NOT IN (10, 30) AND status NOT IN ('closed') ORDER BY title;"));
+
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "Write docs");
+    CHECK_EQ(result.message, "1 row(s) selected");
+}
+
 TEST_CASE("treats empty EXISTS and IN subqueries as false")
 {
     sql_test::ExecutorContext context;

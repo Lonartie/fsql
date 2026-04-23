@@ -84,6 +84,45 @@ TEST_CASE("parses EXISTS and IN subquery predicates")
     CHECK_EQ(static_cast<int>(expression->right->right->kind), static_cast<int>(sql::ExpressionKind::Select));
 }
 
+TEST_CASE("parses inline IN list predicates")
+{
+    const auto expression = sql_test::parse_expression("team_id IN (10, 20, 30) AND owner IN ('ops', 'docs')");
+
+    REQUIRE(expression != nullptr);
+    CHECK_EQ(static_cast<int>(expression->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(expression->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalAnd));
+    REQUIRE(expression->left != nullptr);
+    CHECK_EQ(static_cast<int>(expression->left->binary_operator), static_cast<int>(sql::BinaryOperator::In));
+    REQUIRE(expression->left->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->left->right->kind), static_cast<int>(sql::ExpressionKind::List));
+    REQUIRE_EQ(expression->left->right->arguments.size(), 3U);
+    CHECK_EQ(expression->left->right->arguments[0]->text, "10");
+    REQUIRE(expression->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->right->binary_operator), static_cast<int>(sql::BinaryOperator::In));
+    REQUIRE(expression->right->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->right->right->kind), static_cast<int>(sql::ExpressionKind::List));
+    REQUIRE_EQ(expression->right->right->arguments.size(), 2U);
+    CHECK_EQ(expression->right->right->arguments[0]->text, "ops");
+}
+
+TEST_CASE("parses NOT IN list and subquery predicates")
+{
+    const auto expression = sql_test::parse_expression("team_id NOT IN (10, 20, 30) OR owner NOT IN (SELECT name FROM teams)");
+
+    REQUIRE(expression != nullptr);
+    CHECK_EQ(static_cast<int>(expression->kind), static_cast<int>(sql::ExpressionKind::Binary));
+    CHECK_EQ(static_cast<int>(expression->binary_operator), static_cast<int>(sql::BinaryOperator::LogicalOr));
+    REQUIRE(expression->left != nullptr);
+    CHECK_EQ(static_cast<int>(expression->left->binary_operator), static_cast<int>(sql::BinaryOperator::NotIn));
+    REQUIRE(expression->left->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->left->right->kind), static_cast<int>(sql::ExpressionKind::List));
+    REQUIRE_EQ(expression->left->right->arguments.size(), 3U);
+    REQUIRE(expression->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->right->binary_operator), static_cast<int>(sql::BinaryOperator::NotIn));
+    REQUIRE(expression->right->right != nullptr);
+    CHECK_EQ(static_cast<int>(expression->right->right->kind), static_cast<int>(sql::ExpressionKind::Select));
+}
+
 TEST_CASE("parses ANY and ALL quantified subquery predicates")
 {
     const auto expression = sql_test::parse_expression("score >= ALL (SELECT min_score FROM rules) OR score = ANY (SELECT exact_score FROM overrides)");

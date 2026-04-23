@@ -235,6 +235,117 @@ TEST_CASE("deletes matching rows with where")
     CHECK_EQ(result.message, "Deleted 1 row(s) from 'todos'");
 }
 
+TEST_CASE("qualified WHERE predicates behave consistently across select update and delete")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, team_id, priority, done);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', 10, 8, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', 20, 8, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Archive logs', 10, 3, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (20, 'docs');"));
+
+    const auto select_result = context.executor.execute(sql_test::parse_statement(
+        "SELECT title FROM tasks WHERE tasks.team_id IN (SELECT id FROM teams WHERE name = 'ops') AND tasks.priority >= 5 AND NOT tasks.done;"));
+
+    const auto& selected = sql_test::require_table(select_result);
+    REQUIRE_EQ(selected.rows.size(), 1U);
+    CHECK_EQ(selected.rows[0][0], "Patch release");
+
+    const auto update_result = context.executor.execute(sql_test::parse_statement(
+        "UPDATE tasks SET done = true WHERE tasks.team_id IN (SELECT id FROM teams WHERE name = 'ops') AND tasks.priority >= 5 AND NOT tasks.done;"));
+    CHECK_EQ(update_result.affected_rows, 1U);
+
+    const auto updated = context.storage->load_table("tasks");
+    REQUIRE_EQ(updated.rows.size(), 3U);
+    CHECK_EQ(updated.rows[0][3], "true");
+    CHECK_EQ(updated.rows[1][3], "false");
+    CHECK_EQ(updated.rows[2][3], "false");
+
+    const auto delete_result = context.executor.execute(sql_test::parse_statement(
+        "DELETE FROM tasks WHERE tasks.team_id IN (SELECT id FROM teams WHERE name = 'ops') AND tasks.done = true;"));
+    CHECK_EQ(delete_result.affected_rows, 1U);
+
+    const auto remaining = context.storage->load_table("tasks");
+    REQUIRE_EQ(remaining.rows.size(), 2U);
+    CHECK_EQ(remaining.rows[0][0], "Write docs");
+    CHECK_EQ(remaining.rows[1][0], "Archive logs");
+}
+
+TEST_CASE("single table update and delete reject unknown qualified WHERE identifiers")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', false);"));
+
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("UPDATE tasks SET done = true WHERE missing.done = false;")), std::runtime_error);
+    CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("DELETE FROM tasks WHERE missing.done = false;")), std::runtime_error);
+}
+
+TEST_CASE("update and delete support inline IN list predicates")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (id, title, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (1, 'Patch release', false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (2, 'Write docs', false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (3, 'Rotate keys', false);"));
+
+    const auto update_result = context.executor.execute(sql_test::parse_statement(
+        "UPDATE tasks SET done = true WHERE id IN (1, 3) AND title IN ('Patch release', 'Rotate keys');"));
+    CHECK_EQ(update_result.affected_rows, 2U);
+
+    auto table = context.storage->load_table("tasks");
+    REQUIRE_EQ(table.rows.size(), 3U);
+    CHECK_EQ(table.rows[0][2], "true");
+    CHECK_EQ(table.rows[1][2], "false");
+    CHECK_EQ(table.rows[2][2], "true");
+
+    const auto delete_result = context.executor.execute(sql_test::parse_statement(
+        "DELETE FROM tasks WHERE id IN (3) OR title IN ('Write docs');"));
+    CHECK_EQ(delete_result.affected_rows, 2U);
+
+    table = context.storage->load_table("tasks");
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "1");
+    CHECK_EQ(table.rows[0][1], "Patch release");
+}
+
+TEST_CASE("update and delete support NOT IN predicates")
+{
+    sql_test::ExecutorContext context;
+
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (id, title, team_id, done);"));
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE teams (id, name);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (1, 'Patch release', 10, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (2, 'Write docs', 20, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES (3, 'Rotate keys', 30, false);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (10, 'ops');"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO teams VALUES (30, 'sec');"));
+
+    const auto update_result = context.executor.execute(sql_test::parse_statement(
+        "UPDATE tasks SET done = true WHERE id NOT IN (1, 3) AND team_id NOT IN (SELECT id FROM teams WHERE name = 'ops');"));
+    CHECK_EQ(update_result.affected_rows, 1U);
+
+    auto table = context.storage->load_table("tasks");
+    REQUIRE_EQ(table.rows.size(), 3U);
+    CHECK_EQ(table.rows[0][3], "false");
+    CHECK_EQ(table.rows[1][3], "true");
+    CHECK_EQ(table.rows[2][3], "false");
+
+    const auto delete_result = context.executor.execute(sql_test::parse_statement(
+        "DELETE FROM tasks WHERE id NOT IN (1, 2) OR title NOT IN ('Patch release', 'Write docs');"));
+    CHECK_EQ(delete_result.affected_rows, 1U);
+
+    table = context.storage->load_table("tasks");
+    REQUIRE_EQ(table.rows.size(), 2U);
+    CHECK_EQ(table.rows[0][0], "1");
+    CHECK_EQ(table.rows[1][0], "2");
+}
+
 TEST_CASE("update can assign NULL values")
 {
     sql_test::ExecutorContext context;
