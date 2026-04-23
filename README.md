@@ -1,165 +1,905 @@
 # csv_sql
 
-`csv_sql` is a small C++ SQL-like engine that stores tables as CSV files.
-It can parse and execute a focused subset of SQL statements, making it useful as a learning project, a lightweight toy database, or a compact playground for parser / executor work.
+> A compact C++ SQL-like engine for CSV-backed data, designed to work both as a standalone CLI tool and as an embeddable library.
 
-The project is built with CMake, uses a reusable core library, provides a command-line application, and includes an automated test suite.
+`csv_sql` is a small but ambitious C++20 project that parses and executes a focused SQL-like dialect over CSV files and in-memory tables. It exposes a reusable core library (`sql_core`), a command-line application (`sql`), command wrappers such as `select` and `insert`, and an automated doctest suite.
 
-> This is **not** a full SQLite replacement. It implements a compact SQL dialect on top of CSV-backed storage.
+It is intentionally opinionated: it aims to be understandable, hackable, and embeddable rather than fully SQL-compatible.
 
-## What the project does
+---
 
-At a high level, `csv_sql`:
+## Table of contents
 
-- tokenizes and parses SQL-like input
-- executes statements against in-memory or CSV-backed storage
-- persists tables as `.csv` files
-- prints query results in a readable table format
-- includes tests for parsing, execution, CSV handling, defaults, expressions, aggregates, and more complex workflows
+1. [What is csv_sql?](#1-what-is-csv_sql)
+2. [What is it not?](#2-what-is-it-not)
+3. [How to build csv_sql?](#3-how-to-build-csv_sql)
+4. [How to use it as a CLI tool?](#4-how-to-use-it-as-a-cli-tool)
+5. [How to use it as a library?](#5-how-to-use-it-as-a-library)
+6. [SQL-like syntax explained](#6-sql-like-syntax-explained)
+   - [6.1 Statements overview](#61-statements-overview)
+   - [6.2 Literals, identifiers, and values](#62-literals-identifiers-and-values)
+   - [6.3 SELECT sources](#63-select-sources)
+   - [6.4 Expressions and operators](#64-expressions-and-operators)
+   - [6.5 Grouping and aggregation](#65-grouping-and-aggregation)
+   - [6.6 Subqueries](#66-subqueries)
+   - [6.7 Views](#67-views)
+   - [6.8 ALTER TABLE and schema metadata](#68-alter-table-and-schema-metadata)
+   - [6.9 NULL, defaults, and AUTO_INCREMENT](#69-null-defaults-and-auto_increment)
+   - [6.10 Dialect differences and current limitations](#610-dialect-differences-and-current-limitations)
+7. [Execution model explained](#7-execution-model-explained)
+   - [7.1 High-level pipeline](#71-high-level-pipeline)
+   - [7.2 Storage model](#72-storage-model)
+   - [7.3 Structured results instead of direct printing](#73-structured-results-instead-of-direct-printing)
+   - [7.4 Streaming result model](#74-streaming-result-model)
+   - [7.5 Coroutine executors](#75-coroutine-executors)
+   - [7.6 Where buffering still happens](#76-where-buffering-still-happens)
+   - [7.7 Error handling model](#77-error-handling-model)
+8. [Project layout](#8-project-layout)
+9. [Running the tests](#9-running-the-tests)
+10. [Roadmap and further reading](#10-roadmap-and-further-reading)
 
-## Current feature set
+---
 
-The implementation currently supports a focused subset of SQL functionality, including:
+## 1. What is csv_sql?
 
-- `CREATE TABLE`
-- `DROP TABLE`
-- `INSERT INTO ... VALUES (...)`
-- `SELECT`
-- `UPDATE`
-- `DELETE`
+`csv_sql` is a **SQL-like execution engine** with two main use cases:
 
-Additional supported behavior includes:
+- **Standalone CLI tool** for querying and mutating CSV-backed data from the terminal
+- **Reusable C++ library** for applications that want parsing, execution, storage abstraction, streaming results, and output formatting without owning all of that logic themselves
 
-- column default expressions
-- `AUTO_INCREMENT`
-- arithmetic, logical, comparison, and bitwise expressions
-- SQL keyword boolean operators:
-  - `AND`
-  - `OR`
-  - `NOT`
-- SQL predicate and pattern matching support:
+At a high level, `csv_sql` can:
+
+- tokenize SQL-like input into tokens
+- parse tokens into an AST
+- execute statements against an abstract storage layer
+- use either **CSV-backed storage** or **in-memory storage**
+- stream rows with coroutine-backed generators
+- return **structured execution results** instead of printing directly
+- optionally render those results through a core-owned output writer
+
+### Supported capabilities today
+
+The currently implemented feature set includes:
+
+- Schema operations:
+  - `CREATE TABLE`
+  - `DROP TABLE`
+  - `ALTER TABLE`
+  - `CREATE VIEW`
+  - `DROP VIEW`
+  - `ALTER VIEW`
+- Data operations:
+  - `INSERT INTO ... VALUES (...)`
+  - `UPDATE`
+  - `DELETE`
+  - `SELECT`
+- Query shaping:
+  - `DISTINCT` / `UNIQUE`
+  - `ORDER BY`
+  - `LIMIT`
+  - `OFFSET`
+- Expressions and predicates:
+  - arithmetic operators
+  - logical operators: `AND`, `OR`, `NOT`
+  - bitwise operators
+  - comparisons
   - `BETWEEN`
   - `LIKE`
   - `REGEXP`
-- scalar `SELECT` sub-expressions
-- aggregate functions such as:
+- Aggregation:
   - `COUNT`
   - `SUM`
   - `AVG`
   - `MIN`
   - `MAX`
-- single-table `SELECT` result shaping:
-  - `DISTINCT` / `UNIQUE`
-  - `ORDER BY`
-  - `LIMIT`
-  - `OFFSET`
+  - `GROUP BY`
+  - `HAVING`
+- Subqueries:
+  - scalar `SELECT` expressions
+  - `EXISTS (SELECT ...)`
+  - `IN (SELECT ...)`
+  - quantified comparisons with `ANY` / `ALL`
+- Data model features:
+  - `NULL`
+  - column default expressions
+  - `AUTO_INCREMENT`
+- Multi-source `SELECT`:
+  - comma-separated sources in `FROM`
+  - subquery sources in `FROM`
+  - file-path sources in `FROM`, e.g. `SELECT * FROM '/tmp/tasks.csv'`
+  - qualified columns such as `tasks.title`
+- Streamed execution:
+  - coroutine row/value generators
+  - serial and parallel coroutine executors
+  - structured `ExecutionResult` objects
 
-For planned and completed work, see [`progress.md`](./progress.md).
+---
 
-## How storage works
+## 2. What is it not?
 
-The command-line application uses CSV-backed storage rooted at the **current working directory**.
-That means a table such as:
+This project is **not**:
 
-```sql
-CREATE TABLE todos (title, done);
-```
+- a SQLite replacement
+- a standards-complete SQL engine
+- an ACID database
+- a query optimizer
+- a networked database server
+- a persistent engine with indexes, transactions, or concurrent write isolation
 
-will be stored as a CSV file like:
+### Important disclaimer
 
-```text
-todos.csv
-```
+`csv_sql` intentionally implements a **custom SQL-like dialect**.
 
-in the directory where you run the executable.
+Some syntax is SQL-inspired, but not identical to mainstream engines. For example:
 
-## Build requirements
+- column defaults currently use **`column = expression`** in `CREATE TABLE`, not standard SQL `DEFAULT expression`
+- multi-source queries are currently expressed with **comma-separated `FROM` sources**, not `JOIN` syntax
+- file paths can be used directly as sources in `SELECT`
+- some operators and behaviors are deliberately simplified
 
-Known from the project files:
+If you want exact SQL compatibility, this project is the wrong tool.
+If you want a small, readable, embeddable engine that behaves *like SQL in many places*, this project is exactly that.
 
-- CMake `3.12` or newer
-- a C++20-capable compiler
+---
 
-The project is organized as three CMake subprojects:
+## 3. How to build csv_sql?
 
-- `core/` - parser, tokenizer, executor, storage
-- `sql/` - command-line application
-- `tests/` - doctest-based test suite
+### Requirements
 
-## Build
+From the project files, the known requirements are:
 
-From the repository root:
+- **CMake 3.12+**
+- a **C++20-capable compiler**
+
+### Build from the repository root
 
 ```sh
 cmake -S . -B build
 cmake --build build
 ```
 
-This builds:
+### CMake targets
 
-- the core library
-- the main CLI executable
-- command wrappers such as `select`, `insert`, `update`, `delete`, `create`, and `drop`
-- the `sql_tests` test binary
+The project currently builds the following important targets:
 
-## Run
+| Target | Type | Purpose |
+|---|---|---|
+| `sql_core` | static library | core parsing / execution / storage / streaming engine |
+| `sql_app_lib` | static library | CLI-specific support code |
+| `sql` | executable | main command-line application |
+| `select` | executable | wrapper around `sql` for `SELECT` |
+| `insert` | executable | wrapper around `sql` for `INSERT` |
+| `update` | executable | wrapper around `sql` for `UPDATE` |
+| `delete` | executable | wrapper around `sql` for `DELETE` |
+| `create` | executable | wrapper around `sql` for `CREATE` |
+| `drop` | executable | wrapper around `sql` for `DROP` |
+| `sql_tests` | executable | doctest-based test suite |
 
-The main executable is built from the `sql/` subproject.
-Depending on your generator and platform, the binary will typically be located under the build tree, for example:
+### Typical build output locations
 
-```sh
-./build/sql/sql "CREATE TABLE todos (title, category, done);"
-./build/sql/sql "INSERT INTO todos VALUES ('Buy milk', 'home', false);"
-./build/sql/sql "SELECT * FROM todos ORDER BY title;"
+Depending on your generator/platform, the binaries typically end up under the build tree. In this repository layout, common paths are:
+
+```text
+build/sql/sql
+build/sql/select
+build/sql/insert
+build/tests/sql_tests
 ```
 
-You can also pipe a statement into the program:
+---
+
+## 4. How to use it as a CLI tool?
+
+The CLI uses `CsvStorage`, rooted at the **current working directory**.
+That means running the CLI in some folder makes that folder the backing “database directory” for table/view files.
+
+### 4.1 Main executable
+
+Use the main executable when you want to pass complete statements yourself.
+
+```sh
+./build/sql/sql "CREATE TABLE todos (id AUTO_INCREMENT, title, done = false);"
+./build/sql/sql "INSERT INTO todos (title) VALUES ('Buy milk');"
+./build/sql/sql "SELECT * FROM todos ORDER BY id;"
+```
+
+You can also pipe a statement through standard input:
 
 ```sh
 echo "SELECT * FROM todos;" | ./build/sql/sql
 ```
 
-### Wrapper commands
+### 4.2 Wrapper executables
 
-The project also builds small wrapper executables for common statement types. These prepend the statement keyword automatically.
-Examples:
+Wrapper executables prepend the statement keyword automatically.
+This is convenient when you are repeatedly working with a single statement family.
 
 ```sh
-./build/sql/create "TABLE todos (title, done);"
+./build/sql/create "TABLE todos (title, done = false);"
 ./build/sql/insert "INTO todos VALUES ('Ship release', true);"
-./build/sql/select "* FROM todos;"
+./build/sql/select "* FROM todos WHERE done = false;"
+./build/sql/update "todos SET done = true WHERE title = 'Ship release';"
+./build/sql/delete "FROM todos WHERE done = true;"
+./build/sql/drop "TABLE todos;"
 ```
 
-## Example session
+### 4.3 Help output
+
+```sh
+./build/sql/sql --help
+./build/sql/select --help
+./build/sql/create --help
+```
+
+### 4.4 CLI session example
 
 ```sh
 ./build/sql/sql "CREATE TABLE tasks (id AUTO_INCREMENT, title, category = 'general', done = false);"
 ./build/sql/sql "INSERT INTO tasks (title) VALUES ('Write README');"
 ./build/sql/sql "INSERT INTO tasks (title, category) VALUES ('Fix parser bug', 'dev');"
-./build/sql/sql "SELECT title, category, done FROM tasks ORDER BY category, title;"
-./build/sql/sql "SELECT title FROM tasks WHERE NOT done AND title LIKE 'Write%' OR category REGEXP '^de';"
+./build/sql/sql "SELECT id, title, category, done FROM tasks ORDER BY category, title;"
+./build/sql/sql "UPDATE tasks SET done = true WHERE title = 'Write README';"
+./build/sql/sql "SELECT title FROM tasks WHERE NOT done OR category = 'dev';"
 ```
 
-## Run the tests
+### 4.5 Working with CSV files directly
 
-The repository already enables testing via CMake.
-After building, run:
+One of the most unusual and useful features is direct file-path `SELECT` sources.
 
 ```sh
-ctest --test-dir build --output-on-failure
+./build/sql/sql "SELECT src.title FROM '/tmp/tasks.csv' src WHERE src.done = false ORDER BY src.title;"
 ```
 
-You can also run the test executable directly if you want more control:
+The `.csv` extension is optional if the file exists with that extension.
+
+### 4.6 How CLI persistence works
+
+If you run:
 
 ```sh
-./build/tests/sql_tests
+./build/sql/sql "CREATE TABLE todos (title, done);"
 ```
 
-## Project layout
+from a directory called `workspace/`, the CLI will create something like:
 
 ```text
-core/   Core SQL engine: tokenizer, parser, executor, storage
-sql/    Command-line application
+workspace/todos.csv
+```
+
+Views are persisted separately as `.view.sql` files.
+
+---
+
+## 5. How to use it as a library?
+
+The main library target is **`sql_core`**.
+
+### 5.1 Typical embedding strategy
+
+If you vendor this repository into another CMake project, the simplest approach is:
+
+```cmake
+add_subdirectory(csv_sql)
+
+target_link_libraries(my_app PRIVATE sql_core)
+```
+
+`sql_core` exports its public include directory, so consumers can include the headers from `core/include/`.
+
+### 5.2 The main library concepts
+
+Most embedders will work with these types:
+
+| Type | Role |
+|---|---|
+| `sql::Tokenizer` | turns input text into `Token`s |
+| `sql::Parser` | turns tokens into a parsed `Statement` or `Expression` |
+| `sql::Executor` | executes parsed statements against an `IStorage` |
+| `sql::ExecutionResult` | structured execution outcome |
+| `sql::ExecutionTable` | reopenable streamed result rows for `SELECT` |
+| `sql::IStorage` | abstraction for table/view storage |
+| `sql::CsvStorage` | CSV-backed implementation of `IStorage` |
+| `sql::MemoryStorage` | in-memory implementation of `IStorage` |
+| `sql::ICoroExecutor` | driver for row/value coroutine streams |
+| `sql::SerialCoroExecutor` | serial stream driver |
+| `sql::ParallelCoroExecutor` | overlapped/parallel stream driver |
+| `sql::IOutputWriter` | rendering abstraction for `ExecutionResult` |
+| `sql::ConsoleOutputWriter` | terminal-friendly result formatter |
+
+### 5.3 Minimal library example
+
+```cpp
+#include "ConsoleOutputWriter.h"
+#include "Executor.h"
+#include "MemoryStorage.h"
+#include "ParallelCoroExecutor.h"
+#include "Parser.h"
+#include "Tokenizer.h"
+
+#include <iostream>
+#include <memory>
+#include <string>
+
+int main()
+{
+    auto storage = std::make_shared<sql::MemoryStorage>();
+    auto coro = std::make_shared<sql::ParallelCoroExecutor>();
+    sql::Executor executor(storage, coro);
+    sql::ConsoleOutputWriter writer(coro);
+
+    auto run = [&](const std::string& query)
+    {
+        sql::Tokenizer tokenizer(query);
+        sql::Parser parser(tokenizer.tokenize());
+        const auto result = executor.execute(parser.parse_statement());
+        if (!result.success)
+        {
+            std::cerr << "Error: " << result.error << '\n';
+            return;
+        }
+        writer.write(std::cout, result);
+    };
+
+    run("CREATE TABLE todos (title, done = false);");
+    run("INSERT INTO todos (title) VALUES ('Buy milk');");
+    run("SELECT title, done FROM todos;");
+}
+```
+
+### 5.4 Using the library without console rendering
+
+A key design goal of `csv_sql` is that the core executor **does not need to print**.
+You can inspect `ExecutionResult` directly.
+
+```cpp
+sql::Tokenizer tokenizer("SELECT title FROM todos WHERE done = false;");
+sql::Parser parser(tokenizer.tokenize());
+const auto result = executor.execute(parser.parse_statement());
+
+if (!result.success)
+{
+    throw std::runtime_error(result.error);
+}
+
+if (result.table.has_value())
+{
+    const auto& table = *result.table;
+    coro->drive_rows(table.rows(), [](const sql::Row& row)
+    {
+        std::cout << row[0] << '\n';
+        return true;
+    });
+}
+```
+
+### 5.5 Choosing a storage backend
+
+#### In-memory storage
+
+Use `MemoryStorage` when:
+
+- embedding in tests
+- embedding in tools that do not want filesystem side effects
+- creating ephemeral databases
+
+#### CSV-backed storage
+
+Use `CsvStorage` when:
+
+- you want durable CSV-backed tables and persisted views
+- you want CLI-like behavior from inside another program
+- you want direct access to CSV files in a folder
+
+You can root `CsvStorage` in any directory:
+
+```cpp
+auto storage = std::make_shared<sql::CsvStorage>("/path/to/data");
+```
+
+### 5.6 Rendering human-readable output
+
+If you want CLI-style formatted output from library code, use `ConsoleOutputWriter`.
+
+If you do not, ignore it and handle `ExecutionResult` yourself.
+
+### 5.7 Serialization helpers
+
+`SqlSerialization` functions are also public and useful if you want to:
+
+- turn expressions/statements back into the project’s SQL-like text
+- inspect persisted view definitions
+- build tooling around the AST
+
+---
+
+## 6. SQL-like syntax explained
+
+This section documents the *current* implemented dialect.
+It is intentionally practical rather than pretending to be full ANSI SQL.
+
+### 6.1 Statements overview
+
+Currently supported top-level statement families are:
+
+- `CREATE TABLE`
+- `CREATE VIEW ... AS SELECT ...`
+- `ALTER TABLE`
+- `ALTER VIEW ... AS SELECT ...`
+- `DROP TABLE`
+- `DROP VIEW`
+- `INSERT INTO ... VALUES (...)`
+- `SELECT`
+- `UPDATE`
+- `DELETE FROM`
+
+Examples:
+
+```sql
+CREATE TABLE todos (id AUTO_INCREMENT, title, done = false);
+CREATE VIEW open_todos AS SELECT title FROM todos WHERE done = false;
+ALTER TABLE todos ADD COLUMN category = 'backlog';
+ALTER VIEW open_todos AS SELECT id, title FROM todos WHERE done = false;
+DROP VIEW open_todos;
+DROP TABLE todos;
+```
+
+### 6.2 Literals, identifiers, and values
+
+#### String literals
+
+Use single quotes:
+
+```sql
+'Ship release'
+'ops'
+'2026-04-23'
+```
+
+#### Numbers
+
+Numbers are parsed as numeric literals when possible:
+
+```sql
+1
+42
+3.14
+-7
+```
+
+#### Booleans
+
+This dialect commonly uses text tokens such as `true` and `false` in expressions.
+
+```sql
+done = true
+flag = false
+```
+
+#### NULL
+
+`NULL` is supported explicitly:
+
+```sql
+INSERT INTO tasks VALUES ('Patch release', NULL);
+SELECT title FROM tasks WHERE archived_at IS NULL;
+```
+
+#### Identifiers
+
+Unquoted identifiers are used for table names, view names, column names, and function names.
+
+Qualified identifiers are written as:
+
+```sql
+source.column
+```
+
+Example:
+
+```sql
+SELECT tasks.title, teams.name FROM tasks, teams WHERE tasks.team_id = teams.id;
+```
+
+### 6.3 SELECT sources
+
+`SELECT` sources are more flexible than in many minimal SQL toys.
+
+#### Table sources
+
+```sql
+SELECT * FROM todos;
+```
+
+#### Multiple sources
+
+Multiple comma-separated sources are supported:
+
+```sql
+SELECT tasks.title, teams.name
+FROM tasks, teams
+WHERE tasks.team_id = teams.id;
+```
+
+This is **not** SQL `JOIN` syntax. It is a multi-source `FROM` with predicate-based matching in `WHERE`.
+
+#### Subquery sources
+
+You can use a `SELECT` subquery in `FROM`.
+
+```sql
+SELECT lookup.title
+FROM (SELECT title FROM todos WHERE done = false) lookup;
+```
+
+Aliases are supported for subquery sources and are usually the clearest choice when you want to reference projected columns explicitly.
+
+#### File path sources
+
+You can read directly from CSV files by quoting the path:
+
+```sql
+SELECT src.title FROM '/tmp/tasks.csv' src;
+SELECT * FROM '/tmp/tasks';
+```
+
+The `.csv` extension may be omitted when the file resolves correctly.
+
+### 6.4 Expressions and operators
+
+Supported expression categories include:
+
+#### Arithmetic
+
+```sql
+priority + 1
+hours * rate
+(a + b) / 2
+```
+
+#### Logical
+
+```sql
+NOT done
+owner = 'ops' AND priority >= 5
+team = 'ops' OR team = 'sec'
+```
+
+#### Comparison
+
+```sql
+priority = 10
+priority != 10
+priority < 10
+priority <= 10
+priority > 10
+priority >= 10
+```
+
+#### Bitwise
+
+```sql
+flags & 2
+flags | 1
+flags ^ 8
+~flags
+```
+
+#### SQL-style predicates
+
+```sql
+title LIKE 'Patch%'
+owner REGEXP '^op'
+priority BETWEEN 5 AND 10
+archived_at IS NULL
+archived_at IS NOT NULL
+```
+
+#### Functions
+
+The currently important built-in function is:
+
+```sql
+NOW()
+```
+
+Aggregate functions are also supported in `SELECT` projections:
+
+```sql
+COUNT(*)
+SUM(points)
+AVG(points)
+MIN(points)
+MAX(points)
+```
+
+### 6.5 Grouping and aggregation
+
+Grouped aggregation is supported for single-table grouped queries.
+
+```sql
+SELECT team, COUNT(*), SUM(hours)
+FROM incidents
+WHERE resolved = false
+GROUP BY team
+HAVING SUM(hours) >= 5
+ORDER BY SUM(hours) DESC;
+```
+
+Notes:
+
+- `HAVING` requires `GROUP BY`
+- aggregate expressions are supported in grouped projections/order/having paths
+- grouped queries do **not** support `SELECT *`
+
+### 6.6 Subqueries
+
+Several subquery forms are implemented.
+
+#### Scalar subqueries
+
+```sql
+SELECT title
+FROM todos
+WHERE category = (SELECT value FROM defaults);
+```
+
+#### EXISTS
+
+```sql
+SELECT title
+FROM tasks
+WHERE EXISTS (SELECT id FROM teams WHERE name = 'ops');
+```
+
+#### IN
+
+```sql
+SELECT title
+FROM tasks
+WHERE team_id IN (SELECT id FROM teams WHERE on_call = true);
+```
+
+#### ANY / ALL
+
+```sql
+SELECT title
+FROM tasks
+WHERE severity > ALL (SELECT value FROM thresholds);
+```
+
+### 6.7 Views
+
+Views are stored as serialized `SELECT` statements and behave as readonly virtual tables.
+
+```sql
+CREATE VIEW open_tasks AS
+SELECT title, team
+FROM tasks
+WHERE done = false;
+
+SELECT * FROM open_tasks;
+
+ALTER VIEW open_tasks AS
+SELECT id, title
+FROM tasks
+WHERE done = false;
+
+DROP VIEW open_tasks;
+```
+
+### 6.8 ALTER TABLE and schema metadata
+
+Supported `ALTER TABLE` actions include:
+
+- `ADD COLUMN`
+- `DROP COLUMN`
+- `RENAME COLUMN`
+- `ALTER COLUMN ... SET DEFAULT`
+- `ALTER COLUMN ... DROP DEFAULT`
+- `ALTER COLUMN ... SET AUTO_INCREMENT`
+- `ALTER COLUMN ... DROP AUTO_INCREMENT`
+
+Examples:
+
+```sql
+ALTER TABLE todos ADD COLUMN category = 'backlog';
+ALTER TABLE todos DROP COLUMN category;
+ALTER TABLE todos RENAME COLUMN title TO summary;
+ALTER TABLE todos ALTER COLUMN category SET DEFAULT 'general';
+ALTER TABLE todos ALTER COLUMN category DROP DEFAULT;
+ALTER TABLE todos ALTER COLUMN id SET AUTO_INCREMENT;
+ALTER TABLE todos ALTER COLUMN id DROP AUTO_INCREMENT;
+```
+
+### 6.9 NULL, defaults, and AUTO_INCREMENT
+
+#### Defaults
+
+Defaults are currently declared with `=` in `CREATE TABLE`.
+
+```sql
+CREATE TABLE tasks (
+    id AUTO_INCREMENT,
+    title,
+    category = 'general',
+    created_at = NOW(),
+    archived_at = NULL
+);
+```
+
+Defaults can also be subqueries:
+
+```sql
+CREATE TABLE work_items (
+    category = (SELECT value FROM defaults)
+);
+```
+
+#### AUTO_INCREMENT
+
+Only one `AUTO_INCREMENT` column is supported per table.
+
+```sql
+CREATE TABLE todos (id AUTO_INCREMENT, title);
+```
+
+#### NULL behavior
+
+Currently implemented:
+
+- `NULL` literal
+- `IS NULL`
+- `IS NOT NULL`
+- basic null-aware predicate behavior
+
+### 6.10 Dialect differences and current limitations
+
+This project deliberately differs from mainstream SQL in several ways.
+
+#### Important non-standard / limited areas
+
+- defaults use `column = expr` in table definitions
+- no explicit `JOIN` syntax yet
+- no `UNION`, `INTERSECT`, or `EXCEPT`
+- no transactions
+- no indexes
+- no type system beyond string/numeric/null-style evaluation rules
+- not all SQL functions are implemented
+- this is not a full standards-compliant SQL parser
+
+#### Example of a currently unsupported style
+
+```sql
+SELECT *
+FROM tasks
+INNER JOIN teams ON tasks.team_id = teams.id;
+```
+
+Use multi-source `FROM` plus `WHERE` instead:
+
+```sql
+SELECT tasks.title, teams.name
+FROM tasks, teams
+WHERE tasks.team_id = teams.id;
+```
+
+---
+
+## 7. Execution model explained
+
+### 7.1 High-level pipeline
+
+The engine follows a clear pipeline:
+
+1. **input text**
+2. `Tokenizer`
+3. `Parser`
+4. AST / `Statement`
+5. `Executor`
+6. `ExecutionResult`
+7. optional rendering through an `IOutputWriter`
+
+This separation is intentional and makes the library reusable outside the CLI.
+
+### 7.2 Storage model
+
+Execution is abstracted behind `IStorage`.
+
+That means the same parser/executor works with:
+
+- `CsvStorage`
+- `MemoryStorage`
+- any custom storage implementation you provide
+
+The storage contract separates:
+
+- metadata access (`describe_table`)
+- full table materialization (`load_table`)
+- streaming row scans (`scan_table`)
+- view persistence (`load_view`, `save_view`)
+
+### 7.3 Structured results instead of direct printing
+
+The executor returns a structured `ExecutionResult`.
+That result contains:
+
+- `success`
+- `kind`
+- `affected_rows`
+- `message`
+- optional `table`
+- `error`
+
+This is important for library consumers because it means:
+
+- you can inspect results programmatically
+- you do not need the CLI
+- you do not need to depend on console formatting
+
+### 7.4 Streaming result model
+
+For `SELECT`, the returned `ExecutionTable` does **not** necessarily hold rows in a fully materialized vector.
+Instead it exposes:
+
+```cpp
+std::function<RowGenerator()> rows;
+```
+
+This means result rows are reopenable and streamable.
+Consumers can drive them directly with a coroutine executor.
+
+### 7.5 Coroutine executors
+
+The streaming engine uses coroutine-backed generators (`RowGenerator`, `ValueGenerator`) plus an execution driver interface:
+
+- `ICoroExecutor`
+- `SerialCoroExecutor`
+- `ParallelCoroExecutor`
+
+#### `SerialCoroExecutor`
+
+Consumes rows/values serially in order.
+Good for deterministic simple execution.
+
+#### `ParallelCoroExecutor`
+
+Overlaps loading and consumption where safe.
+It preserves ordered consumer callbacks while allowing independent work to be scheduled more aggressively.
+
+### 7.6 Where buffering still happens
+
+The engine prefers streaming, but some query features still require buffering or reshaping.
+Typical buffering cases include:
+
+- `ORDER BY`
+- `DISTINCT`
+- grouped aggregation
+- aggregate result shaping
+- some derived / buffered subquery paths
+
+In other words:
+
+- simple streamable `SELECT` paths can stay streamed
+- result-shaping operations that fundamentally require all relevant rows may materialize intermediate state
+
+### 7.7 Error handling model
+
+`Executor::execute(...)` catches exceptions and returns failed `ExecutionResult` values.
+
+That means library consumers can choose either of these styles:
+
+- inspect `result.success` / `result.error`
+- wrap execution with their own throwing helper if they prefer exception-style control flow
+
+The test suite includes an example of the latter pattern.
+
+---
+
+## 8. Project layout
+
+```text
+core/   Core SQL engine: tokenizer, parser, executor, storage, streaming
+sql/    Command-line application and wrapper support
 tests/  Automated tests
 ```
 
@@ -167,19 +907,43 @@ More specifically:
 
 - `core/include/` contains public headers
 - `core/src/` contains the engine implementation
-- `sql/src/Application.cpp` wires command-line input to the parser and executor
-- `tests/` contains method-grouped test suites
+- `sql/src/` contains CLI input/help/application logic
+- `tests/` contains grouped doctest suites for parser, executor, and storage behavior
 
-## Development notes
+---
 
-This project is best understood as a compact SQL engine with a deliberately limited scope.
-It is a good base for experimenting with:
+## 9. Running the tests
 
-- parsing and AST design
-- query execution
-- CSV-backed persistence
-- incremental language feature development
-- test-driven implementation of SQL features
+After building, run the full suite with CTest:
 
-If you want to see what is done and what is planned next, check [`progress.md`](./progress.md).
+```sh
+ctest --test-dir build --output-on-failure
+```
 
+Or run the doctest binary directly:
+
+```sh
+./build/tests/sql_tests
+```
+
+---
+
+## 10. Roadmap and further reading
+
+To see planned and completed work, check:
+
+- [`progress.md`](./progress.md)
+
+That file tracks both implemented features and explicitly planned follow-up work such as:
+
+- SQL standard alignment improvements
+- more functions
+- set operations
+- richer join syntax
+- deeper documentation (`SYNTAX.md` is planned)
+
+---
+
+If you use `csv_sql` as a library, the most important takeaway is this:
+
+> the parser, executor, storage abstraction, streaming result model, and output formatting are intentionally decoupled, so you can embed only the parts you need.
