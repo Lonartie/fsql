@@ -6,12 +6,9 @@
 #include "Parser.h"
 #include "Tokenizer.h"
 
-#include <chrono>
-#include <filesystem>
 #include <memory>
-#include <sstream>
+#include <stdexcept>
 #include <string>
-#include <system_error>
 
 namespace sql_test
 {
@@ -31,37 +28,47 @@ namespace sql_test
 
     struct ExecutorContext
     {
+        struct ThrowingExecutor
+        {
+            sql::Executor inner;
+
+            explicit ThrowingExecutor(std::shared_ptr<sql::IStorage> storage)
+                : inner(std::move(storage))
+            {
+            }
+
+            sql::ExecutionResult execute(const sql::Statement& statement)
+            {
+                const auto result = inner.execute(statement);
+                if (!result.success)
+                {
+                    throw std::runtime_error(result.error);
+                }
+                return result;
+            }
+        };
+
         std::shared_ptr<sql::MemoryStorage> storage;
-        std::ostringstream output;
-        sql::Executor executor;
+        ThrowingExecutor executor;
 
-        ExecutorContext() : storage(std::make_shared<sql::MemoryStorage>()), executor(storage, output)
+        ExecutorContext() : storage(std::make_shared<sql::MemoryStorage>()), executor(storage)
         {
-        }
-
-        void reset_output()
-        {
-            output.str("");
-            output.clear();
         }
     };
 
-    struct TempDirectoryGuard
+
+    inline const sql::ExecutionTable& require_table(const sql::ExecutionResult& result)
     {
-        std::filesystem::path path;
-
-        explicit TempDirectoryGuard(const std::string& prefix)
-            : path(std::filesystem::temp_directory_path() / (prefix + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())))
+        if (!result.success)
         {
-            std::filesystem::remove_all(path);
-            std::filesystem::create_directories(path);
+            throw std::runtime_error("Expected successful result but got error: " + result.error);
         }
-
-        ~TempDirectoryGuard()
+        if (!result.table.has_value())
         {
-            std::error_code error;
-            std::filesystem::remove_all(path, error);
+            throw std::runtime_error("Expected result table to be present");
         }
-    };
+        return *result.table;
+    }
+
 }
 

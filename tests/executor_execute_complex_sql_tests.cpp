@@ -44,17 +44,16 @@ TEST_CASE("handles deeply nested workflow with defaults subqueries updates selec
     CHECK_EQ(updated.rows[2][2], "ops");
     CHECK_EQ(updated.rows[2][3], "true");
 
-    context.reset_output();
-    context.executor.execute(sql_test::parse_statement(
+    const auto select_result = context.executor.execute(sql_test::parse_statement(
         "SELECT title, category FROM work_items "
         "WHERE !(done = true && category = 'docs') "
         "&& (((flags | 1) > 0) || (~priority < 0));"));
 
-    const auto select_text = context.output.str();
-    CHECK(select_text.find("Patch release") != std::string::npos);
-    CHECK(select_text.find("Night watch") != std::string::npos);
-    CHECK(select_text.find("Write docs") == std::string::npos);
-    CHECK(select_text.find("2 row(s) selected") != std::string::npos);
+    const auto& select_table = sql_test::require_table(select_result);
+    REQUIRE_EQ(select_table.rows.size(), 2U);
+    CHECK_EQ(select_table.rows[0][0], "Patch release");
+    CHECK_EQ(select_table.rows[1][0], "Night watch");
+    CHECK_EQ(select_result.message, "2 row(s) selected");
 
     context.executor.execute(sql_test::parse_statement("DELETE FROM work_items WHERE done = true && ((flags & 2) = 0);"));
 
@@ -151,14 +150,18 @@ TEST_CASE("supports aggregate subqueries inside larger maintenance workflow")
     CHECK_EQ(tasks.rows[1][3], "true");
     CHECK_EQ(tasks.rows[2][3], "false");
 
-    context.reset_output();
-    context.executor.execute(sql_test::parse_statement(
+    const auto result = context.executor.execute(sql_test::parse_statement(
         "SELECT COUNT(*), SUM(points), AVG(points), MIN(points), MAX(points) "
         "FROM tasks WHERE team = 'ops' && ((flags & 2) = 2 || done = true);"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("| 3        | 26          | 8.66667     | 5           | 13          |") != std::string::npos);
-    CHECK(text.find("1 row(s) selected") != std::string::npos);
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "3");
+    CHECK_EQ(table.rows[0][1], "26");
+    CHECK_EQ(table.rows[0][2], "8.66667");
+    CHECK_EQ(table.rows[0][3], "5");
+    CHECK_EQ(table.rows[0][4], "13");
+    CHECK_EQ(result.message, "1 row(s) selected");
 }
 
 TEST_CASE("combines distinct ordering and pagination in a larger review workflow")
@@ -182,18 +185,18 @@ TEST_CASE("combines distinct ordering and pagination in a larger review workflow
     CHECK_EQ(table.rows[0][4], "priority");
     CHECK_EQ(table.rows[4][4], "priority");
 
-    context.reset_output();
-    context.executor.execute(sql_test::parse_statement(
+    const auto result = context.executor.execute(sql_test::parse_statement(
         "SELECT DISTINCT owner, status FROM deployments "
         "WHERE (risk >= 4 && environment = 'prod') || retries > 1 "
         "ORDER BY status DESC, owner ASC LIMIT 2 OFFSET 1;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("| docs  | pending |") != std::string::npos);
-    CHECK(text.find("| ops   | pending |") != std::string::npos);
-    CHECK(text.find("| sec   | pending |") == std::string::npos);
-    CHECK(text.find("| sec   | blocked |") == std::string::npos);
-    CHECK(text.find("2 row(s) selected") != std::string::npos);
+    const auto& result_table = sql_test::require_table(result);
+    REQUIRE_EQ(result_table.rows.size(), 2U);
+    CHECK_EQ(result_table.rows[0][0], "docs");
+    CHECK_EQ(result_table.rows[0][1], "pending");
+    CHECK_EQ(result_table.rows[1][0], "ops");
+    CHECK_EQ(result_table.rows[1][1], "pending");
+    CHECK_EQ(result.message, "2 row(s) selected");
 }
 
 TEST_CASE("summarizes changing workloads with grouping having ordering and pagination")
@@ -218,18 +221,19 @@ TEST_CASE("summarizes changing workloads with grouping having ordering and pagin
     CHECK_EQ(after_update.rows[3][4], "true");
     CHECK_EQ(after_update.rows[5][4], "false");
 
-    context.reset_output();
-    context.executor.execute(sql_test::parse_statement(
+    const auto result = context.executor.execute(sql_test::parse_statement(
         "SELECT team, COUNT(*), SUM(hours), MAX(severity) "
         "FROM incidents WHERE resolved = false "
         "GROUP BY team HAVING SUM(hours) >= 5 "
         "ORDER BY SUM(hours) DESC, team ASC LIMIT 2 OFFSET 0;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("| docs | 2        | 7          | 6             |") != std::string::npos);
-    CHECK(text.find("| ops  | 1        | 4          | 7             |") == std::string::npos);
-    CHECK(text.find("| sec  |") == std::string::npos);
-    CHECK(text.find("1 row(s) selected") != std::string::npos);
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "docs");
+    CHECK_EQ(table.rows[0][1], "2");
+    CHECK_EQ(table.rows[0][2], "7");
+    CHECK_EQ(table.rows[0][3], "6");
+    CHECK_EQ(result.message, "1 row(s) selected");
 }
 
 TEST_CASE("combines multiple select sources and derived tables in a reporting workflow")
@@ -249,20 +253,20 @@ TEST_CASE("combines multiple select sources and derived tables in a reporting wo
     context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES (2, 7, true);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO incidents VALUES (3, 3, true);"));
 
-    context.reset_output();
-    context.executor.execute(sql_test::parse_statement(
+    const auto result = context.executor.execute(sql_test::parse_statement(
         "SELECT svc.name, teams.name, incident_rows.open "
         "FROM services svc, teams, "
         "(SELECT service_id, open FROM incidents WHERE open = true) incident_rows "
         "WHERE svc.team_id = teams.id AND svc.id = incident_rows.service_id AND svc.active = true "
         "ORDER BY svc.name ASC;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("billing") != std::string::npos);
-    CHECK(text.find("search") != std::string::npos);
-    CHECK(text.find("ops") != std::string::npos);
-    CHECK(text.find("docs") == std::string::npos);
-    CHECK(text.find("2 row(s) selected") != std::string::npos);
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 2U);
+    CHECK_EQ(table.rows[0][0], "billing");
+    CHECK_EQ(table.rows[0][1], "ops");
+    CHECK_EQ(table.rows[1][0], "search");
+    CHECK_EQ(table.rows[1][1], "ops");
+    CHECK_EQ(result.message, "2 row(s) selected");
 }
 
 TEST_CASE("uses EXISTS and IN predicate subqueries in a larger triage workflow")
@@ -293,18 +297,18 @@ TEST_CASE("uses EXISTS and IN predicate subqueries in a larger triage workflow")
     CHECK_EQ(updated.rows[1][3], "open");
     CHECK_EQ(updated.rows[2][3], "priority");
 
-    context.reset_output();
-    context.executor.execute(sql_test::parse_statement(
+    const auto result = context.executor.execute(sql_test::parse_statement(
         "SELECT title, status FROM tasks "
         "WHERE id IN (SELECT task_id FROM escalations WHERE active = true) "
         "OR (EXISTS (SELECT id FROM teams WHERE name = 'docs') AND team_id IN (SELECT id FROM teams WHERE name = 'docs')) "
         "ORDER BY title;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("Patch release") != std::string::npos);
-    CHECK(text.find("Rotate keys") != std::string::npos);
-    CHECK(text.find("Write docs") != std::string::npos);
-    CHECK(text.find("3 row(s) selected") != std::string::npos);
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 3U);
+    CHECK_EQ(table.rows[0][0], "Patch release");
+    CHECK_EQ(table.rows[1][0], "Rotate keys");
+    CHECK_EQ(table.rows[2][0], "Write docs");
+    CHECK_EQ(result.message, "3 row(s) selected");
 }
 
 TEST_CASE("uses ANY and ALL quantified subqueries in a larger escalation workflow")
@@ -335,20 +339,18 @@ TEST_CASE("uses ANY and ALL quantified subqueries in a larger escalation workflo
     CHECK_EQ(updated.rows[2][4], "priority");
     CHECK_EQ(updated.rows[3][4], "open");
 
-    context.reset_output();
-    context.executor.execute(sql_test::parse_statement(
+    const auto result = context.executor.execute(sql_test::parse_statement(
         "SELECT title, status FROM tasks "
         "WHERE severity >= ANY (SELECT level FROM thresholds) "
         "AND severity <= ALL (SELECT level + 2 FROM thresholds WHERE level >= 6) "
         "AND team_id = ANY (SELECT team_id FROM on_call) "
         "ORDER BY title;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("Rotate keys") != std::string::npos);
-    CHECK(text.find("Renew cert") != std::string::npos);
-    CHECK(text.find("Write docs") == std::string::npos);
-    CHECK(text.find("Patch release") == std::string::npos);
-    CHECK(text.find("2 row(s) selected") != std::string::npos);
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 2U);
+    CHECK_EQ(table.rows[0][0], "Renew cert");
+    CHECK_EQ(table.rows[1][0], "Rotate keys");
+    CHECK_EQ(result.message, "2 row(s) selected");
 }
 
 TEST_CASE("uses NULL values in a larger archival workflow")
@@ -369,17 +371,16 @@ TEST_CASE("uses NULL values in a larger archival workflow")
     const auto updated = context.storage->load_table("tasks");
     REQUIRE_EQ(updated.rows.size(), 4U);
 
-    context.reset_output();
-    context.executor.execute(sql_test::parse_statement(
+    const auto result = context.executor.execute(sql_test::parse_statement(
         "SELECT title, archived_at FROM tasks WHERE archived_at IS NULL ORDER BY title;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("Patch release") != std::string::npos);
-    CHECK(text.find("Renew cert") == std::string::npos);
-    CHECK(text.find("Write docs") != std::string::npos);
-    CHECK(text.find("Rotate keys") == std::string::npos);
-    CHECK(text.find("NULL") != std::string::npos);
-    CHECK(text.find("2 row(s) selected") != std::string::npos);
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 2U);
+    CHECK_EQ(table.rows[0][0], "Patch release");
+    CHECK_EQ(table.rows[0][1], "NULL");
+    CHECK_EQ(table.rows[1][0], "Write docs");
+    CHECK_EQ(table.rows[1][1], "NULL");
+    CHECK_EQ(result.message, "2 row(s) selected");
 }
 
 TEST_CASE("uses multiple alter table actions in a staged schema evolution workflow")
@@ -408,15 +409,15 @@ TEST_CASE("uses multiple alter table actions in a staged schema evolution workfl
     CHECK_EQ(table.rows[1][2], "backlog");
     CHECK_EQ(table.rows[2][2], "general");
 
-    context.reset_output();
-    context.executor.execute(sql_test::parse_statement("SELECT id, title, category FROM tasks ORDER BY id;"));
+    const auto result = context.executor.execute(sql_test::parse_statement("SELECT id, title, category FROM tasks ORDER BY id;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("Patch release") != std::string::npos);
-    CHECK(text.find("Write docs") != std::string::npos);
-    CHECK(text.find("Rotate keys") != std::string::npos);
-    CHECK(text.find("general") != std::string::npos);
-    CHECK(text.find("3 row(s) selected") != std::string::npos);
+    const auto& result_table = sql_test::require_table(result);
+    REQUIRE_EQ(result_table.rows.size(), 3U);
+    CHECK_EQ(result_table.rows[0][1], "Patch release");
+    CHECK_EQ(result_table.rows[1][1], "Write docs");
+    CHECK_EQ(result_table.rows[2][1], "Rotate keys");
+    CHECK_EQ(result_table.rows[2][2], "general");
+    CHECK_EQ(result.message, "3 row(s) selected");
 }
 
 TEST_SUITE_END();

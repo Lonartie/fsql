@@ -1,4 +1,5 @@
 add_library(sql_core STATIC
+    src/ConsoleOutputWriter.cpp
     src/CsvStorage.cpp
     src/Executor.cpp
     src/MemoryStorage.cpp

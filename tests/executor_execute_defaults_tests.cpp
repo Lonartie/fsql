@@ -55,7 +55,6 @@ TEST_CASE("stores NOW default as expression and evaluates it on insert")
     const auto created_table = context.storage->load_table("dates");
     CHECK(created_table.columns[0].find("DEFAULT(NOW())") != std::string::npos);
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
     context.executor.execute(sql_test::parse_statement("INSERT INTO dates (label) VALUES ('custom');"));
 
     const auto inserted_table = context.storage->load_table("dates");

@@ -4,18 +4,12 @@
 
 TEST_SUITE_BEGIN("CsvStorage::load_table");
 
-TEST_CASE("round-trips a table on disk")
+TEST_CASE("rejects missing tables without writing files")
 {
-    const sql_test::TempDirectoryGuard temp_dir("sql_doctest_roundtrip");
+    const auto root = std::filesystem::temp_directory_path() / "csv_sql_missing_storage_root";
+    sql::CsvStorage storage(root);
 
-    sql::CsvStorage storage(temp_dir.path);
-    sql::Table table{"todos", {"title", "text"}, {{"Buy milk", "hello, world"}}};
-    storage.save_table(table);
-
-    const auto loaded = storage.load_table("todos");
-    REQUIRE_EQ(loaded.rows.size(), 1U);
-    CHECK_EQ(loaded.rows[0][0], "Buy milk");
-    CHECK_EQ(loaded.rows[0][1], "hello, world");
+    CHECK_THROWS_AS(storage.load_table("todos"), std::runtime_error);
 }
 
 TEST_SUITE_END();

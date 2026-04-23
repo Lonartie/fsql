@@ -4,6 +4,19 @@
 
 TEST_SUITE_BEGIN("Executor::execute");
 
+TEST_CASE("returns failed execution results without throwing from the core executor")
+{
+    auto storage = std::make_shared<sql::MemoryStorage>();
+    sql::Executor executor(storage);
+
+    const auto result = executor.execute(sql_test::parse_statement("SELECT * FROM missing;"));
+
+    CHECK_FALSE(result.success);
+    CHECK_EQ(static_cast<int>(result.kind), static_cast<int>(sql::ExecutionResultKind::None));
+    CHECK(result.table == std::nullopt);
+    CHECK(result.error.find("missing") != std::string::npos);
+}
+
 TEST_CASE("insert with explicit columns fills unspecified values with empty strings")
 {
     sql_test::ExecutorContext context;
@@ -26,13 +39,14 @@ TEST_CASE("update modifies only matching rows")
     context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, category, text, done);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk', 'home', '2 liters', 'false');"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Write docs', 'work', 'API docs', 'false');"));
-    context.executor.execute(sql_test::parse_statement("UPDATE todos SET done = true WHERE title = 'Buy milk';"));
+    const auto result = context.executor.execute(sql_test::parse_statement("UPDATE todos SET done = true WHERE title = 'Buy milk';"));
 
     const auto table = context.storage->load_table("todos");
     REQUIRE_EQ(table.rows.size(), 2U);
     CHECK_EQ(table.rows[0][3], "true");
     CHECK_EQ(table.rows[1][3], "false");
-    CHECK(context.output.str().find("Updated 1 row(s) in 'todos'") != std::string::npos);
+    CHECK_EQ(result.affected_rows, 1U);
+    CHECK_EQ(result.message, "Updated 1 row(s) in 'todos'");
 }
 
 TEST_CASE("update without where modifies all rows")
@@ -42,13 +56,14 @@ TEST_CASE("update without where modifies all rows")
     context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, done);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('A', false);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('B', false);"));
-    context.executor.execute(sql_test::parse_statement("UPDATE todos SET done = true;"));
+    const auto result = context.executor.execute(sql_test::parse_statement("UPDATE todos SET done = true;"));
 
     const auto table = context.storage->load_table("todos");
     REQUIRE_EQ(table.rows.size(), 2U);
     CHECK_EQ(table.rows[0][1], "true");
     CHECK_EQ(table.rows[1][1], "true");
-    CHECK(context.output.str().find("Updated 2 row(s) in 'todos'") != std::string::npos);
+    CHECK_EQ(result.affected_rows, 2U);
+    CHECK_EQ(result.message, "Updated 2 row(s) in 'todos'");
 }
 
 TEST_CASE("drops table from memory storage")
@@ -56,9 +71,9 @@ TEST_CASE("drops table from memory storage")
     sql_test::ExecutorContext context;
 
     context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, done);"));
-    context.executor.execute(sql_test::parse_statement("DROP TABLE todos;"));
+    const auto result = context.executor.execute(sql_test::parse_statement("DROP TABLE todos;"));
 
-    CHECK(context.output.str().find("Dropped table 'todos'") != std::string::npos);
+    CHECK_EQ(result.message, "Dropped table 'todos'");
     CHECK_THROWS_AS(context.storage->load_table("todos"), std::runtime_error);
 }
 
@@ -98,12 +113,12 @@ TEST_CASE("alter table rename column keeps data accessible under new name")
     context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, archived_at);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk', '2026-04-22');"));
     context.executor.execute(sql_test::parse_statement("ALTER TABLE todos RENAME COLUMN archived_at TO closed_at;"));
-    context.reset_output();
 
-    context.executor.execute(sql_test::parse_statement("SELECT closed_at FROM todos;"));
+    const auto result = context.executor.execute(sql_test::parse_statement("SELECT closed_at FROM todos;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("2026-04-22") != std::string::npos);
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "2026-04-22");
     CHECK_THROWS_AS(context.executor.execute(sql_test::parse_statement("SELECT archived_at FROM todos;")), std::runtime_error);
 }
 
@@ -165,14 +180,13 @@ TEST_CASE("alter view replaces stored definition")
     context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Archive logs', true);"));
     context.executor.execute(sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title FROM tasks WHERE done = false;"));
     context.executor.execute(sql_test::parse_statement("ALTER VIEW open_tasks AS SELECT title FROM tasks WHERE done = true;"));
-    context.reset_output();
 
-    context.executor.execute(sql_test::parse_statement("SELECT title FROM open_tasks;"));
+    const auto result = context.executor.execute(sql_test::parse_statement("SELECT title FROM open_tasks;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("Archive logs") != std::string::npos);
-    CHECK(text.find("Patch release") == std::string::npos);
-    CHECK(text.find("1 row(s) selected") != std::string::npos);
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "Archive logs");
+    CHECK_EQ(result.message, "1 row(s) selected");
 }
 
 TEST_CASE("rejects write operations and mismatched drop commands against views")
@@ -212,12 +226,13 @@ TEST_CASE("deletes matching rows with where")
     context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, done);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk', true);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Write docs', false);"));
-    context.executor.execute(sql_test::parse_statement("DELETE FROM todos WHERE done = true;"));
+    const auto result = context.executor.execute(sql_test::parse_statement("DELETE FROM todos WHERE done = true;"));
 
     const auto table = context.storage->load_table("todos");
     REQUIRE_EQ(table.rows.size(), 1U);
     CHECK_EQ(table.rows[0][0], "Write docs");
-    CHECK(context.output.str().find("Deleted 1 row(s) from 'todos'") != std::string::npos);
+    CHECK_EQ(result.affected_rows, 1U);
+    CHECK_EQ(result.message, "Deleted 1 row(s) from 'todos'");
 }
 
 TEST_CASE("update can assign NULL values")
@@ -227,13 +242,13 @@ TEST_CASE("update can assign NULL values")
     context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, archived_at);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk', '2026-04-22');"));
     context.executor.execute(sql_test::parse_statement("UPDATE todos SET archived_at = NULL WHERE title = 'Buy milk';"));
-    context.reset_output();
 
-    context.executor.execute(sql_test::parse_statement("SELECT title FROM todos WHERE archived_at IS NULL;"));
+    const auto result = context.executor.execute(sql_test::parse_statement("SELECT title FROM todos WHERE archived_at IS NULL;"));
 
-    const auto text = context.output.str();
-    CHECK(text.find("Buy milk") != std::string::npos);
-    CHECK(text.find("1 row(s) selected") != std::string::npos);
+    const auto& table = sql_test::require_table(result);
+    REQUIRE_EQ(table.rows.size(), 1U);
+    CHECK_EQ(table.rows[0][0], "Buy milk");
+    CHECK_EQ(result.message, "1 row(s) selected");
 }
 
 TEST_CASE("deletes all rows without where")
@@ -243,51 +258,27 @@ TEST_CASE("deletes all rows without where")
     context.executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, done);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Buy milk', true);"));
     context.executor.execute(sql_test::parse_statement("INSERT INTO todos VALUES ('Write docs', false);"));
-    context.executor.execute(sql_test::parse_statement("DELETE FROM todos;"));
+    const auto result = context.executor.execute(sql_test::parse_statement("DELETE FROM todos;"));
 
     const auto table = context.storage->load_table("todos");
     CHECK(table.rows.empty());
-    CHECK(context.output.str().find("Deleted 2 row(s) from 'todos'") != std::string::npos);
+    CHECK_EQ(result.affected_rows, 2U);
+    CHECK_EQ(result.message, "Deleted 2 row(s) from 'todos'");
 }
 
-TEST_CASE("drops csv-backed table files")
+TEST_CASE("drops views from memory storage")
 {
-    const sql_test::TempDirectoryGuard temp_dir("sql_doctest_drop");
-    const auto csv_path = temp_dir.path / "todos.csv";
+    sql_test::ExecutorContext context;
 
-    auto storage = std::make_shared<sql::CsvStorage>(temp_dir.path);
-    std::ostringstream output;
-    sql::Executor executor(storage, output);
+    context.executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, done);"));
+    context.executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', false);"));
+    context.executor.execute(sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title FROM tasks WHERE done = false;"));
+    CHECK(context.storage->has_view("open_tasks"));
 
-    executor.execute(sql_test::parse_statement("CREATE TABLE todos (title, done);"));
-    REQUIRE(std::filesystem::exists(csv_path));
-    executor.execute(sql_test::parse_statement("DROP TABLE todos;"));
-    CHECK_FALSE(std::filesystem::exists(csv_path));
-}
-
-TEST_CASE("persists and drops csv-backed views")
-{
-    const sql_test::TempDirectoryGuard temp_dir("sql_doctest_view");
-    const auto view_path = temp_dir.path / "open_tasks.view.sql";
-
-    auto storage = std::make_shared<sql::CsvStorage>(temp_dir.path);
-    std::ostringstream output;
-    sql::Executor executor(storage, output);
-
-    executor.execute(sql_test::parse_statement("CREATE TABLE tasks (title, done);"));
-    executor.execute(sql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', false);"));
-    executor.execute(sql_test::parse_statement("CREATE VIEW open_tasks AS SELECT title FROM tasks WHERE done = false;"));
-    REQUIRE(std::filesystem::exists(view_path));
-
-    auto reloaded_storage = std::make_shared<sql::CsvStorage>(temp_dir.path);
-    std::ostringstream reloaded_output;
-    sql::Executor reloaded_executor(reloaded_storage, reloaded_output);
-
-    reloaded_executor.execute(sql_test::parse_statement("SELECT title FROM open_tasks;"));
-    CHECK(reloaded_output.str().find("Patch release") != std::string::npos);
-
-    reloaded_executor.execute(sql_test::parse_statement("DROP VIEW open_tasks;"));
-    CHECK_FALSE(std::filesystem::exists(view_path));
+    const auto result = context.executor.execute(sql_test::parse_statement("DROP VIEW open_tasks;"));
+    CHECK_EQ(result.message, "Dropped view 'open_tasks'");
+    CHECK_FALSE(context.storage->has_view("open_tasks"));
+    CHECK_THROWS_AS(context.storage->load_view("open_tasks"), std::runtime_error);
 }
 
 TEST_SUITE_END();

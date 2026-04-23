@@ -1,5 +1,6 @@
 #include "Application.h"
 
+#include "ConsoleOutputWriter.h"
 #include "CsvStorage.h"
 #include "Executor.h"
 #include "Parser.h"
@@ -58,8 +59,16 @@ namespace sql
 
             Tokenizer tokenizer(query);
             Parser parser(tokenizer.tokenize());
-            Executor executor(std::make_shared<CsvStorage>(), std::cout);
-            executor.execute(parser.parse_statement());
+            Executor executor(std::make_shared<CsvStorage>());
+            ConsoleOutputWriter writer;
+            const auto result = executor.execute(parser.parse_statement());
+            if (!result.success)
+            {
+                std::cerr << "Error: " << result.error << '\n';
+                return 1;
+            }
+
+            writer.write(std::cout, result);
             return 0;
         }
         catch (const std::exception& ex)

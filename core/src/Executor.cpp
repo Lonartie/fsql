@@ -43,11 +43,31 @@ namespace sql
             return is_stored_null(value) ? "NULL" : value;
         }
 
-        struct SelectResult
+        ExecutionTable make_visible_execution_table(ExecutionTable table)
         {
-            std::vector<std::string> column_names;
-            std::vector<Row> rows;
-        };
+            for (auto& row : table.rows)
+            {
+                for (auto& value : row)
+                {
+                    value = visible_value_text(value);
+                }
+            }
+            return table;
+        }
+
+        ExecutionResult make_success_result(ExecutionResultKind kind,
+                                            std::size_t affected_rows,
+                                            std::string message,
+                                            std::optional<ExecutionTable> table = std::nullopt)
+        {
+            ExecutionResult result;
+            result.success = true;
+            result.kind = kind;
+            result.affected_rows = affected_rows;
+            result.message = std::move(message);
+            result.table = std::move(table);
+            return result;
+        }
 
         struct ProjectedSelectRow
         {
@@ -374,7 +394,7 @@ namespace sql
                                                     const ExpressionPtr& right,
                                                     const IStorage& storage);
 
-        SelectResult run_select_statement(const SelectStatement& stmt, const IStorage& storage);
+        ExecutionTable run_select_statement(const SelectStatement& stmt, const IStorage& storage);
 
         thread_local std::vector<std::string> active_view_stack;
 
@@ -441,7 +461,7 @@ namespace sql
             return statement.select;
         }
 
-        SelectResult run_view_statement(const std::string& view_name, const IStorage& storage)
+        ExecutionTable run_view_statement(const std::string& view_name, const IStorage& storage)
         {
             ActiveViewGuard guard(view_name);
             return run_select_statement(parse_view_statement(storage.load_view(view_name)), storage);
@@ -850,26 +870,6 @@ namespace sql
             return std::to_string(maximum + 1);
         }
 
-        std::string make_separator(const std::vector<std::size_t>& widths)
-        {
-            std::ostringstream stream;
-            stream << '+';
-            for (const auto width : widths)
-            {
-                stream << std::string(width + 2, '-') << '+';
-            }
-            return stream.str();
-        }
-
-        void write_row(std::ostream& output, const std::vector<std::string>& values, const std::vector<std::size_t>& widths)
-        {
-            output << '|';
-            for (std::size_t i = 0; i < values.size(); ++i)
-            {
-                output << ' ' << std::left << std::setw(static_cast<int>(widths[i])) << visible_value_text(values[i]) << ' ' << '|';
-            }
-            output << '\n';
-        }
 
         bool contains_aggregate_function(const ExpressionPtr& expression)
         {
@@ -1552,7 +1552,7 @@ namespace sql
             return groups;
         }
 
-        SelectResult run_select_statement(const SelectStatement& stmt, const IStorage& storage)
+        ExecutionTable run_select_statement(const SelectStatement& stmt, const IStorage& storage)
         {
             const auto table = materialize_select_table(stmt, storage);
             const auto rows = filter_rows(table, stmt.where, storage);
@@ -1570,7 +1570,7 @@ namespace sql
                 }
 
                 const auto group_by_identifiers = collect_group_by_column_indexes(stmt, table);
-                SelectResult result;
+                ExecutionTable result;
                 for (const auto& projection : stmt.projections)
                 {
                     validate_grouped_expression(projection, table, group_by_identifiers);
@@ -1631,7 +1631,7 @@ namespace sql
 
             if (stmt.select_all)
             {
-                SelectResult result;
+                ExecutionTable result;
                 for (std::size_t i = 0; i < table.columns.size(); ++i)
                 {
                     result.column_names.push_back(select_star_column_name(table, i));
@@ -1658,7 +1658,7 @@ namespace sql
                 return result;
             }
 
-            SelectResult result;
+            ExecutionTable result;
             bool has_aggregate_projection = false;
             for (const auto& projection : stmt.projections)
             {
@@ -1919,8 +1919,8 @@ namespace sql
         }
     }
 
-    Executor::Executor(std::shared_ptr<IStorage> storage, std::ostream& output)
-        : storage_(std::move(storage)), output_(output)
+    Executor::Executor(std::shared_ptr<IStorage> storage)
+        : storage_(std::move(storage))
     {
         if (!storage_)
         {
@@ -1928,35 +1928,43 @@ namespace sql
         }
     }
 
-    void Executor::execute(const Statement& statement)
+    ExecutionResult Executor::execute(const Statement& statement)
     {
-        switch (statement.kind)
+        try
         {
-        case Statement::Kind::Alter:
-            execute_alter(statement.alter);
-            break;
-        case Statement::Kind::Create:
-            execute_create(statement.create);
-            break;
-        case Statement::Kind::Drop:
-            execute_drop(statement.drop);
-            break;
-        case Statement::Kind::Delete:
-            execute_delete(statement.delete_statement);
-            break;
-        case Statement::Kind::Insert:
-            execute_insert(statement.insert);
-            break;
-        case Statement::Kind::Select:
-            execute_select(statement.select);
-            break;
-        case Statement::Kind::Update:
-            execute_update(statement.update);
-            break;
+            switch (statement.kind)
+            {
+            case Statement::Kind::Alter:
+                return execute_alter(statement.alter);
+            case Statement::Kind::Create:
+                return execute_create(statement.create);
+            case Statement::Kind::Drop:
+                return execute_drop(statement.drop);
+            case Statement::Kind::Delete:
+                return execute_delete(statement.delete_statement);
+            case Statement::Kind::Insert:
+                return execute_insert(statement.insert);
+            case Statement::Kind::Select:
+                return execute_select(statement.select);
+            case Statement::Kind::Update:
+                return execute_update(statement.update);
+            }
         }
+        catch (const std::exception& ex)
+        {
+            ExecutionResult result;
+            result.success = false;
+            result.error = ex.what();
+            return result;
+        }
+
+        ExecutionResult result;
+        result.success = false;
+        result.error = "Unsupported statement kind";
+        return result;
     }
 
-    void Executor::execute_alter(const AlterStatement& stmt)
+    ExecutionResult Executor::execute_alter(const AlterStatement& stmt)
     {
         const bool has_table = storage_->has_table(stmt.table_name);
         const bool has_view = storage_->has_view(stmt.table_name);
@@ -1997,8 +2005,7 @@ namespace sql
                 throw;
             }
 
-            output_ << "Altered view '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered view '" + stmt.table_name + "'");
         }
 
         if (has_view)
@@ -2054,8 +2061,7 @@ namespace sql
             }
 
             storage_->save_table(table);
-            output_ << "Altered table '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
         }
         case AlterAction::DropColumn:
         {
@@ -2072,8 +2078,7 @@ namespace sql
             }
 
             storage_->save_table(table);
-            output_ << "Altered table '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
         }
         case AlterAction::RenameColumn:
         {
@@ -2092,8 +2097,7 @@ namespace sql
             table.columns[index] = serialize_column_metadata(metadata);
 
             storage_->save_table(table);
-            output_ << "Altered table '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
         }
         case AlterAction::SetDefault:
         {
@@ -2107,8 +2111,7 @@ namespace sql
             table.columns[index] = serialize_column_metadata(metadata);
 
             storage_->save_table(table);
-            output_ << "Altered table '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
         }
         case AlterAction::DropDefault:
         {
@@ -2118,8 +2121,7 @@ namespace sql
             table.columns[index] = serialize_column_metadata(metadata);
 
             storage_->save_table(table);
-            output_ << "Altered table '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
         }
         case AlterAction::SetAutoIncrement:
         {
@@ -2131,8 +2133,7 @@ namespace sql
             backfill_auto_increment_column(table, index);
 
             storage_->save_table(table);
-            output_ << "Altered table '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
         }
         case AlterAction::DropAutoIncrement:
         {
@@ -2142,15 +2143,16 @@ namespace sql
             table.columns[index] = serialize_column_metadata(metadata);
 
             storage_->save_table(table);
-            output_ << "Altered table '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Alter, 0, "Altered table '" + stmt.table_name + "'");
         }
         case AlterAction::SetViewQuery:
             fail("ALTER VIEW action reached ALTER TABLE handler");
         }
+
+        fail("Unsupported ALTER action");
     }
 
-    void Executor::execute_create(const CreateStatement& stmt)
+    ExecutionResult Executor::execute_create(const CreateStatement& stmt)
     {
         if (stmt.object_kind == SchemaObjectKind::View)
         {
@@ -2182,8 +2184,7 @@ namespace sql
                 throw;
             }
 
-            output_ << "Created view '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Create, 0, "Created view '" + stmt.table_name + "'");
         }
 
         if (stmt.columns.empty())
@@ -2217,10 +2218,10 @@ namespace sql
             table.columns.push_back(std::move(stored_name));
         }
         storage_->save_table(table);
-        output_ << "Created table '" << stmt.table_name << "'\n";
+        return make_success_result(ExecutionResultKind::Create, 0, "Created table '" + stmt.table_name + "'");
     }
 
-    void Executor::execute_drop(const DropStatement& stmt)
+    ExecutionResult Executor::execute_drop(const DropStatement& stmt)
     {
         const bool has_table = storage_->has_table(stmt.table_name);
         const bool has_view = storage_->has_view(stmt.table_name);
@@ -2236,8 +2237,7 @@ namespace sql
                 fail("Cannot DROP VIEW because '" + stmt.table_name + "' is a table");
             }
             storage_->delete_view(stmt.table_name);
-            output_ << "Dropped view '" << stmt.table_name << "'\n";
-            return;
+            return make_success_result(ExecutionResultKind::Drop, 0, "Dropped view '" + stmt.table_name + "'");
         }
 
         if (has_view)
@@ -2246,10 +2246,10 @@ namespace sql
         }
 
         storage_->delete_table(stmt.table_name);
-        output_ << "Dropped table '" << stmt.table_name << "'\n";
+        return make_success_result(ExecutionResultKind::Drop, 0, "Dropped table '" + stmt.table_name + "'");
     }
 
-    void Executor::execute_delete(const DeleteStatement& stmt)
+    ExecutionResult Executor::execute_delete(const DeleteStatement& stmt)
     {
         if (storage_->has_view(stmt.table_name))
         {
@@ -2275,10 +2275,12 @@ namespace sql
 
         const auto deleted = original_size - table.rows.size();
         storage_->save_table(table);
-        output_ << "Deleted " << deleted << " row(s) from '" << stmt.table_name << "'\n";
+        return make_success_result(ExecutionResultKind::Delete,
+                                   deleted,
+                                   "Deleted " + std::to_string(deleted) + " row(s) from '" + stmt.table_name + "'");
     }
 
-    void Executor::execute_insert(const InsertStatement& stmt)
+    ExecutionResult Executor::execute_insert(const InsertStatement& stmt)
     {
         if (storage_->has_view(stmt.table_name))
         {
@@ -2351,39 +2353,20 @@ namespace sql
 
         table.rows.push_back(std::move(row));
         storage_->save_table(table);
-        output_ << "Inserted 1 row into '" << stmt.table_name << "'\n";
+        return make_success_result(ExecutionResultKind::Insert, 1, "Inserted 1 row into '" + stmt.table_name + "'");
     }
 
-    void Executor::execute_select(const SelectStatement& stmt)
+    ExecutionResult Executor::execute_select(const SelectStatement& stmt)
     {
-        const auto result = run_select_statement(stmt, *storage_);
-
-        std::vector<std::size_t> widths(result.column_names.size(), 0);
-        for (std::size_t i = 0; i < result.column_names.size(); ++i)
-        {
-            widths[i] = result.column_names[i].size();
-        }
-        for (const auto& row : result.rows)
-        {
-            for (std::size_t i = 0; i < row.size(); ++i)
-            {
-                widths[i] = std::max(widths[i], visible_value_text(row[i]).size());
-            }
-        }
-
-        const auto separator = make_separator(widths);
-        output_ << separator << '\n';
-        write_row(output_, result.column_names, widths);
-        output_ << separator << '\n';
-        for (const auto& row : result.rows)
-        {
-            write_row(output_, row, widths);
-        }
-        output_ << separator << '\n';
-        output_ << result.rows.size() << " row(s) selected\n";
+        auto table = run_select_statement(stmt, *storage_);
+        const auto row_count = table.rows.size();
+        return make_success_result(ExecutionResultKind::Select,
+                                   row_count,
+                                   std::to_string(row_count) + " row(s) selected",
+                                   make_visible_execution_table(std::move(table)));
     }
 
-    void Executor::execute_update(const UpdateStatement& stmt)
+    ExecutionResult Executor::execute_update(const UpdateStatement& stmt)
     {
         if (storage_->has_view(stmt.table_name))
         {
@@ -2414,6 +2397,8 @@ namespace sql
         }
 
         storage_->save_table(table);
-        output_ << "Updated " << updated << " row(s) in '" << stmt.table_name << "'\n";
+        return make_success_result(ExecutionResultKind::Update,
+                                   updated,
+                                   "Updated " + std::to_string(updated) + " row(s) in '" + stmt.table_name + "'");
     }
 }

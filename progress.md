@@ -3,7 +3,14 @@
 ## Planned
 - Align default value syntax with SQL standard (e.g. DEFAULT 'value' instead of = 'value')
 - JOINs
+- Allow file paths as table sources like `SELECT * FROM '/Users/name/data'` with file extension optional
 - UNION, UNION ALL, INTERSECT, EXCEPT
+- Use coroutines for processing large datasets and streaming results instead of loading everything into memory at once
+  - Use nested fork/join model for loading/processing/outputting data 
+  - Write coroutine classes that yield rows / values one at a time
+  - Write an ICoroExecutor interface as an engine that runs the coroutines
+    - Write a SerialCoroExecutor that runs coroutines serially for simple cases
+    - Write a ParallelCoroExecutor that runs tasks in parallel if they are independent
 - Further NULL semantics alignment beyond the basic literal/predicate support
 - Further align operator semantics with SQL standard beyond the implemented keyword operators
   - Standardize remaining non-SQL operators / aliases and edge-case semantics

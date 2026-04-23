@@ -14,6 +14,7 @@ namespace sql
         /// @return Process exit code.
         int run(int argc, char** argv);
 
+
     private:
         /// @brief Builds a SQL query string from command-line arguments.
         /// @param argc Argument count.
