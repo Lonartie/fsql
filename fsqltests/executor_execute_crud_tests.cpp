@@ -397,7 +397,7 @@ TEST_CASE("csv storage supports quoted file paths for table statements")
     fsql_test::TemporaryDirectory temp_directory;
     std::filesystem::create_directories(temp_directory.path / "data");
 
-    auto storage = std::make_shared<fsql::CsvStorage>(temp_directory.path);
+    auto storage = std::make_shared<fsql::FileStorage>(temp_directory.path);
     fsql::Executor executor(storage);
     const auto table_path = temp_directory.path / "data" / "tasks";
     const auto table_path_text = table_path.string();
@@ -434,13 +434,76 @@ TEST_CASE("csv storage supports quoted file paths for table statements")
     CHECK_FALSE(std::filesystem::exists(table_path_text + ".csv"));
 }
 
+TEST_CASE("storage supports explicit table formats and identifier auto-detection for table statements")
+{
+    const std::vector<std::string> extensions = {".json", ".toml", ".yaml", ".xml"};
+
+    for (const auto& extension : extensions)
+    {
+        SUBCASE(extension.c_str())
+        {
+            fsql_test::TemporaryDirectory temp_directory;
+            auto storage = std::make_shared<fsql::FileStorage>(temp_directory.path);
+            fsql::Executor executor(storage);
+
+            auto run = [&](const std::string& query)
+            {
+                const auto result = executor.execute(fsql_test::parse_statement(query));
+                REQUIRE(result.success);
+                return result;
+            };
+
+            const auto explicit_name = "tasks" + extension;
+            const auto create_result = run("CREATE TABLE " + explicit_name + " (id AUTO_INCREMENT, title, done = false);");
+            CHECK_EQ(create_result.message, "Created table '" + explicit_name + "'");
+            CHECK(std::filesystem::exists(temp_directory.path / explicit_name));
+
+            const auto insert_result = run("INSERT INTO tasks (title) VALUES ('Patch release');");
+            CHECK_EQ(insert_result.message, "Inserted 1 row into 'tasks'");
+
+            const auto update_result = run("UPDATE tasks SET done = true WHERE title = 'Patch release';");
+            CHECK_EQ(update_result.message, "Updated 1 row(s) in 'tasks'");
+
+            const auto loaded = storage->load_table({fsql::RelationReference::Kind::Identifier, "tasks"});
+            REQUIRE(loaded.storage_path.has_value());
+            CHECK_EQ(loaded.storage_path->extension().string(), extension);
+            REQUIRE_EQ(loaded.rows.size(), 1U);
+            CHECK_EQ(loaded.rows[0][0], "1");
+            CHECK_EQ(loaded.rows[0][1], "Patch release");
+            CHECK_EQ(loaded.rows[0][2], "true");
+
+            const auto delete_result = run("DELETE FROM tasks WHERE done = true;");
+            CHECK_EQ(delete_result.message, "Deleted 1 row(s) from 'tasks'");
+            CHECK(storage->load_table({fsql::RelationReference::Kind::Identifier, "tasks"}).rows.empty());
+
+            const auto drop_result = run("DROP TABLE tasks;");
+            CHECK_EQ(drop_result.message, "Dropped table 'tasks'");
+            CHECK_FALSE(std::filesystem::exists(temp_directory.path / explicit_name));
+        }
+    }
+}
+
+TEST_CASE("identifier table lookups fail when multiple storage formats match")
+{
+    fsql_test::TemporaryDirectory temp_directory;
+    auto storage = std::make_shared<fsql::FileStorage>(temp_directory.path);
+    fsql::Executor executor(storage);
+
+    REQUIRE(executor.execute(fsql_test::parse_statement("CREATE TABLE tasks.json (title);")) .success);
+    REQUIRE(executor.execute(fsql_test::parse_statement("CREATE TABLE tasks.yaml (title);")) .success);
+
+    const auto result = executor.execute(fsql_test::parse_statement("SELECT * FROM tasks;"));
+    CHECK_FALSE(result.success);
+    CHECK(result.error.find("Ambiguous table reference 'tasks'") != std::string::npos);
+}
+
 TEST_CASE("csv storage supports quoted file paths for view statements")
 {
     fsql_test::TemporaryDirectory temp_directory;
     std::filesystem::create_directories(temp_directory.path / "tables");
     std::filesystem::create_directories(temp_directory.path / "views");
 
-    auto storage = std::make_shared<fsql::CsvStorage>(temp_directory.path);
+    auto storage = std::make_shared<fsql::FileStorage>(temp_directory.path);
     fsql::Executor executor(storage);
     const auto table_path = temp_directory.path / "tables" / "tasks";
     const auto view_path = temp_directory.path / "views" / "open_tasks";

@@ -7,6 +7,19 @@
 
 namespace fsql
 {
+    namespace
+    {
+        bool has_explicit_table_format_suffix(const std::string& name)
+        {
+            return name.ends_with(".csv")
+                || name.ends_with(".json")
+                || name.ends_with(".toml")
+                || name.ends_with(".yaml")
+                || name.ends_with(".yml")
+                || name.ends_with(".xml");
+        }
+    }
+
     Parser::Parser(std::vector<Token> tokens) : tokens_(std::move(tokens))
     {
     }
@@ -60,6 +73,14 @@ namespace fsql
         if (check(TokenType::Identifier))
         {
             reference.name = advance().text;
+            while (consume_optional(TokenType::Dot))
+            {
+                reference.name += "." + expect_identifier("Expected identifier after '.'");
+            }
+            if (has_explicit_table_format_suffix(reference.name))
+            {
+                reference.kind = RelationReference::Kind::FilePath;
+            }
             return reference;
         }
         if (check(TokenType::String))

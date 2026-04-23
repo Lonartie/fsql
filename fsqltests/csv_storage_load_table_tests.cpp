@@ -18,7 +18,7 @@ TEST_CASE("loads a table from an explicit file path with optional csv extension"
     auto without_extension = fixture;
     without_extension.replace_extension();
 
-    const auto loaded = fsql::CsvStorage::load_table_from_path(without_extension);
+    const auto loaded = fsql::FileStorage::load_table_from_path(without_extension);
     REQUIRE_EQ(loaded.columns.size(), 3U);
     REQUIRE_EQ(loaded.rows.size(), 3U);
     CHECK_EQ(loaded.name, "file_source_tasks");
@@ -33,8 +33,8 @@ TEST_CASE("loads a view from an explicit file path with optional view suffix")
     std::filesystem::create_directories(temp_directory.path / "tables");
     std::filesystem::create_directories(temp_directory.path / "views");
 
-    fsql::CsvStorage storage(temp_directory.path);
-    fsql::Executor executor(std::make_shared<fsql::CsvStorage>(temp_directory.path));
+    fsql::FileStorage storage(temp_directory.path);
+    fsql::Executor executor(std::make_shared<fsql::FileStorage>(temp_directory.path));
     const auto table_path = temp_directory.path / "tables" / "tasks";
     const auto view_path = temp_directory.path / "views" / "open_tasks";
 
@@ -43,7 +43,7 @@ TEST_CASE("loads a view from an explicit file path with optional view suffix")
     REQUIRE(executor.execute(fsql_test::parse_statement("INSERT INTO '" + table_path.string() + "' VALUES ('Patch release', false);")).success);
     REQUIRE(executor.execute(fsql_test::parse_statement("CREATE VIEW '" + view_path.string() + "' AS SELECT title FROM '" + table_path.string() + "';")).success);
 
-    const auto loaded = fsql::CsvStorage::load_view_from_path(view_path);
+    const auto loaded = fsql::FileStorage::load_view_from_path(view_path);
     CHECK_EQ(loaded.name, "open_tasks");
     CHECK(loaded.select_statement.find("SELECT title FROM '") != std::string::npos);
 
@@ -53,6 +53,72 @@ TEST_CASE("loads a view from an explicit file path with optional view suffix")
     const auto loaded_without_suffix = storage.load_view({fsql::RelationReference::Kind::FilePath, without_extension.string()});
     CHECK_EQ(loaded_without_suffix.name, without_extension.string());
     CHECK(loaded_without_suffix.select_statement.find("SELECT title FROM '") != std::string::npos);
+}
+
+TEST_CASE("loads supported non-csv table formats from explicit paths without extensions")
+{
+    const std::vector<std::string> extensions = {".json", ".toml", ".yaml", ".xml"};
+
+    for (const auto& extension : extensions)
+    {
+        SUBCASE(extension.c_str())
+        {
+            fsql_test::TemporaryDirectory temp_directory;
+            auto storage = std::make_shared<fsql::FileStorage>(temp_directory.path);
+            fsql::Executor executor(storage);
+
+            const auto table_name = "tasks" + extension;
+            auto create_result = executor.execute(fsql_test::parse_statement("CREATE TABLE " + table_name + " (title, done);"));
+            REQUIRE(create_result.success);
+            REQUIRE(executor.execute(fsql_test::parse_statement("INSERT INTO tasks VALUES ('Patch release', false);")).success);
+            REQUIRE(executor.execute(fsql_test::parse_statement("INSERT INTO tasks VALUES ('Write docs', true);")).success);
+
+            const auto loaded = fsql::FileStorage::load_table_from_path(temp_directory.path / "tasks");
+            REQUIRE_EQ(loaded.columns.size(), 2U);
+            REQUIRE_EQ(loaded.rows.size(), 2U);
+            CHECK_EQ(loaded.name, "tasks");
+            REQUIRE(loaded.storage_path.has_value());
+            CHECK_EQ(loaded.storage_path->extension().string(), extension);
+            CHECK_EQ(loaded.rows[0][0], "Patch release");
+            CHECK_EQ(loaded.rows[1][0], "Write docs");
+        }
+    }
+}
+
+TEST_CASE("errors when table format auto-detection is ambiguous")
+{
+    fsql_test::TemporaryDirectory temp_directory;
+    auto storage = std::make_shared<fsql::FileStorage>(temp_directory.path);
+    fsql::Executor executor(storage);
+
+    REQUIRE(executor.execute(fsql_test::parse_statement("CREATE TABLE tasks.json (title);")) .success);
+    REQUIRE(executor.execute(fsql_test::parse_statement("CREATE TABLE tasks.yaml (title);")) .success);
+
+    CHECK_THROWS_AS(storage->load_table({fsql::RelationReference::Kind::Identifier, "tasks"}), std::runtime_error);
+    CHECK_THROWS_AS(fsql::FileStorage::load_table_from_path(temp_directory.path / "tasks"), std::runtime_error);
+}
+
+TEST_CASE("explicit table file paths with extensions are not treated as views")
+{
+    const std::vector<std::string> extensions = {".csv", ".json", ".toml", ".yaml", ".xml"};
+
+    for (const auto& extension : extensions)
+    {
+        SUBCASE(extension.c_str())
+        {
+            fsql_test::TemporaryDirectory temp_directory;
+            auto storage = std::make_shared<fsql::FileStorage>(temp_directory.path);
+            fsql::Executor executor(storage);
+
+            const auto table_path = temp_directory.path / ("tasks" + extension);
+            REQUIRE(executor.execute(fsql_test::parse_statement("CREATE TABLE '" + table_path.string() + "' (title);" )).success);
+
+            const fsql::RelationReference reference{fsql::RelationReference::Kind::FilePath, table_path.string()};
+            CHECK(storage->has_table(reference));
+            CHECK_FALSE(storage->has_view(reference));
+            CHECK_THROWS_AS(storage->load_view(reference), std::runtime_error);
+        }
+    }
 }
 
 TEST_SUITE_END();

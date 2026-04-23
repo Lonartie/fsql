@@ -1,8 +1,8 @@
 # fsql
 
-> A compact, AI-built C++ SQL-like engine for CSV-backed data, designed to work both as a standalone CLI tool and as an embeddable library.
+> A compact, AI-built C++ SQL-like engine for file-backed tabular data, designed to work both as a standalone CLI tool and as an embeddable library.
 
-`fsql` is a small but ambitious C++20 project that parses and executes a focused SQL-like dialect over CSV files and in-memory tables. It exposes a reusable core library (`fsqllib`), a command-line application (`fsql`), command wrappers such as `select` and `insert`, and an automated doctest suite.
+`fsql` is a small but ambitious C++20 project that parses and executes a focused SQL-like dialect over file-backed and in-memory tables. CSV remains the default on-disk format, and JSON, TOML, YAML, and XML table files are also supported. It exposes a reusable core library (`fsqllib`), a command-line application (`fsql`), command wrappers such as `fselect` and `finsert`, and an automated doctest suite.
 
 It is intentionally opinionated: it aims to be understandable and embeddable rather than fully SQL-compatible.
 
@@ -44,7 +44,7 @@ It is intentionally opinionated: it aims to be understandable and embeddable rat
 
 `fsql` is a **SQL-like execution engine** with two main use cases:
 
-- **Standalone CLI tool** for querying and mutating CSV-backed data from the terminal
+- **Standalone CLI tool** for querying and mutating file-backed data from the terminal
 - **Reusable C++ library** for applications that want parsing, execution, storage abstraction, streaming results, and output formatting without owning all of that logic themselves
 
 At a high level, `fsql` can:
@@ -52,7 +52,7 @@ At a high level, `fsql` can:
 - tokenize SQL-like input into tokens
 - parse tokens into an AST
 - execute statements against an abstract storage layer
-- use either **CSV-backed storage** or **in-memory storage**
+- use either **file-backed storage** or **in-memory storage**
 - stream rows with coroutine-backed generators
 - return **structured execution results** instead of printing directly
 - optionally render those results through a core-owned output writer
@@ -163,18 +163,18 @@ cmake --build build
 
 The project currently builds the following important targets:
 
-| Target | Type | Purpose |
-|---|---|---|
-| `fsqllib` | static library | core parsing / execution / storage / streaming engine |
+| Target       | Type | Purpose |
+|--------------|---|---|
+| `fsqllib`    | static library | core parsing / execution / storage / streaming engine |
 | `fsqlapplib` | static library | CLI-specific support code |
-| `fsql` | executable | main command-line application |
-| `select` | executable | wrapper around `fsql` for `SELECT` |
-| `insert` | executable | wrapper around `fsql` for `INSERT` |
-| `update` | executable | wrapper around `fsql` for `UPDATE` |
-| `delete` | executable | wrapper around `fsql` for `DELETE` |
-| `create` | executable | wrapper around `fsql` for `CREATE` |
-| `drop` | executable | wrapper around `fsql` for `DROP` |
-| `fsqltests` | executable | doctest-based test suite |
+| `fsql`       | executable | main command-line application |
+| `fselect`    | executable | wrapper around `fsql` for `SELECT` |
+| `finsert`    | executable | wrapper around `fsql` for `INSERT` |
+| `fupdate`    | executable | wrapper around `fsql` for `UPDATE` |
+| `fdelete`    | executable | wrapper around `fsql` for `DELETE` |
+| `fcreate`    | executable | wrapper around `fsql` for `CREATE` |
+| `fdrop`      | executable | wrapper around `fsql` for `DROP` |
+| `fsqltests`  | executable | doctest-based test suite |
 
 ### Typical build output locations
 
@@ -182,8 +182,8 @@ Depending on your generator/platform, the binaries typically end up under the bu
 
 ```text
 build/fsql/fsql
-build/fsql/select
-build/fsql/insert
+build/fsql/fselect
+build/fsql/finsert
 build/fsqltests/fsqltests
 ```
 
@@ -193,6 +193,8 @@ build/fsqltests/fsqltests
 
 The CLI uses `CsvStorage`, rooted at the **current working directory**.
 That means running the CLI in some folder makes that folder the backing “database directory” for table/view files.
+
+For tables, `.csv` is the default write format when no extension is specified. Existing `.json`, `.toml`, `.yaml` / `.yml`, and `.xml` tables are also detected automatically when a table name is resolved without an explicit extension.
 
 ### 4.1 Main executable
 
@@ -216,20 +218,20 @@ Wrapper executables prepend the statement keyword automatically.
 This is convenient when you are repeatedly working with a single statement family.
 
 ```sh
-./build/fsql/create "TABLE todos (title, done = false);"
-./build/fsql/insert "INTO todos VALUES ('Ship release', true);"
-./build/fsql/select "* FROM todos WHERE done = false;"
-./build/fsql/update "todos SET done = true WHERE title = 'Ship release';"
-./build/fsql/delete "FROM todos WHERE done = true;"
-./build/fsql/drop "TABLE todos;"
+./build/fsql/fcreate "TABLE todos (title, done = false);"
+./build/fsql/finsert "INTO todos VALUES ('Ship release', true);"
+./build/fsql/fselect "* FROM todos WHERE done = false;"
+./build/fsql/fupdate "todos SET done = true WHERE title = 'Ship release';"
+./build/fsql/fdelete "FROM todos WHERE done = true;"
+./build/fsql/fdrop "TABLE todos;"
 ```
 
 ### 4.3 Help output
 
 ```sh
 ./build/fsql/fsql --help
-./build/fsql/select --help
-./build/fsql/create --help
+./build/fsql/fselect --help
+./build/fsql/fcreate --help
 ```
 
 ### 4.4 CLI session example
@@ -243,7 +245,7 @@ This is convenient when you are repeatedly working with a single statement famil
 ./build/fsql/fsql "SELECT title FROM tasks WHERE NOT done OR category = 'dev';"
 ```
 
-### 4.5 Working with CSV files directly
+### 4.5 Working with table files directly
 
 Quoted file paths can be used anywhere the dialect would normally accept a table or view identifier.
 That includes `CREATE TABLE`, `CREATE VIEW`, `INSERT INTO`, `UPDATE`, `DELETE FROM`, `DROP TABLE`, `DROP VIEW`, and `SELECT ... FROM ...`.
@@ -256,7 +258,16 @@ That includes `CREATE TABLE`, `CREATE VIEW`, `INSERT INTO`, `UPDATE`, `DELETE FR
 ./build/fsql/fsql "SELECT * FROM '/tmp/open_tasks';"
 ```
 
-For table files, the `.csv` extension is optional when it can be resolved correctly.
+For table files, `.csv` is the default when writing without an explicit extension.
+When reading or mutating an existing table, the engine can auto-detect `.csv`, `.json`, `.toml`, `.yaml` / `.yml`, and `.xml` files when the extension is omitted.
+If multiple table files share the same base name, the command fails with an ambiguity error.
+
+```sh
+./build/fsql/fsql "CREATE TABLE tasks.json (id AUTO_INCREMENT, title, done = false);"
+./build/fsql/fsql "INSERT INTO tasks (title) VALUES ('Write README');"
+./build/fsql/fsql "SELECT title FROM tasks WHERE done = false ORDER BY title;"
+```
+
 For view files, the `.view.sql` suffix is optional when it can be resolved correctly.
 Relative quoted paths are resolved from the active `CsvStorage` root, which for the CLI is the current working directory.
 

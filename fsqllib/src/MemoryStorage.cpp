@@ -6,6 +6,17 @@
 
 namespace fsql
 {
+    namespace
+    {
+        RowGenerator scan_rows(std::vector<Row> rows)
+        {
+            for (const auto& row : rows)
+            {
+                co_yield row;
+            }
+        }
+    }
+
 
     std::filesystem::path MemoryStorage::table_path(const RelationReference& table_name) const
     {
@@ -48,10 +59,7 @@ namespace fsql
             fail("Table does not exist: " + table_name.name);
         }
 
-        for (const auto& row : it->second.rows)
-        {
-            co_yield row;
-        }
+        return scan_rows(it->second.rows);
     }
 
     ViewDefinition MemoryStorage::load_view(const RelationReference& view_name) const

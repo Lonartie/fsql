@@ -208,7 +208,7 @@ namespace fsql
                 << version() << '\n'
                 << "Usage: [program] [options]\n"
                 << "Programs:\n"
-                << "  fsql          Main SQL application\n"
+                << "  fsql          Main application\n"
                 << "  select        Run or inspect SELECT statements\n"
                 << "  insert        Run or inspect INSERT statements\n"
                 << "  update        Run or inspect UPDATE statements\n"

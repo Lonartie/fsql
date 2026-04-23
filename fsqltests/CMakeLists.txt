@@ -9,6 +9,7 @@ set(SQL_TEST_SOURCES
     csv_storage_escape_csv_tests.cpp
     csv_storage_parse_csv_line_tests.cpp
     csv_storage_load_table_tests.cpp
+    concrete_storage_contract_tests.cpp
     executor_execute_crud_tests.cpp
     executor_execute_select_tests.cpp
     executor_execute_expression_tests.cpp

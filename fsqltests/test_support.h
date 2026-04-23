@@ -2,6 +2,7 @@
 
 #include "CsvStorage.h"
 #include "Executor.h"
+#include "FileStorage.h"
 #include "MemoryStorage.h"
 #include "Parser.h"
 #include "SerialCoroExecutor.h"

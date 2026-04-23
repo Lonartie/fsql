@@ -268,7 +268,7 @@ TEST_CASE("select reads rows from quoted view file paths")
     std::filesystem::create_directories(temp_directory.path / "tables");
     std::filesystem::create_directories(temp_directory.path / "views");
 
-    auto storage = std::make_shared<fsql::CsvStorage>(temp_directory.path);
+    auto storage = std::make_shared<fsql::FileStorage>(temp_directory.path);
     fsql::Executor executor(storage);
     const auto table_path = temp_directory.path / "tables" / "tasks";
     const auto view_path = temp_directory.path / "views" / "open_tasks";
@@ -311,6 +311,44 @@ TEST_CASE("select reads rows from file path sources with optional csv extension"
     CHECK_EQ(table.rows[0][0], "Patch release");
     CHECK_EQ(table.rows[1][0], "Write docs");
     CHECK_EQ(result.message, "2 row(s) selected");
+}
+
+TEST_CASE("select reads rows from file path sources with explicit storage extensions")
+{
+    const std::vector<std::string> extensions = {".csv", ".json", ".toml", ".yaml", ".xml"};
+
+    for (const auto& extension : extensions)
+    {
+        SUBCASE(extension.c_str())
+        {
+            fsql_test::TemporaryDirectory temp_directory;
+            auto storage = std::make_shared<fsql::FileStorage>(temp_directory.path);
+            fsql::Executor executor(storage);
+
+            const auto table_path = temp_directory.path / ("tasks" + extension);
+            const auto table_path_text = table_path.string();
+
+            auto run = [&](const std::string& query)
+            {
+                const auto result = executor.execute(fsql_test::parse_statement(query));
+                REQUIRE(result.success);
+                return result;
+            };
+
+            run("CREATE TABLE '" + table_path_text + "' (title, done);");
+            run("INSERT INTO '" + table_path_text + "' VALUES ('Patch release', false);");
+            run("INSERT INTO '" + table_path_text + "' VALUES ('Write docs', false);");
+            run("INSERT INTO '" + table_path_text + "' VALUES ('Archive logs', true);");
+
+            const auto result = run("SELECT src.title FROM '" + table_path_text + "' src WHERE src.done = false ORDER BY src.title;");
+
+            const auto& table = fsql_test::require_table(result);
+            REQUIRE_EQ(table.rows.size(), 2U);
+            CHECK_EQ(table.rows[0][0], "Patch release");
+            CHECK_EQ(table.rows[1][0], "Write docs");
+            CHECK_EQ(result.message, "2 row(s) selected");
+        }
+    }
 }
 
 TEST_CASE("select combines multiple file path sources with aliases")

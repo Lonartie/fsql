@@ -35,12 +35,12 @@ namespace fsql
 
     bool QueryInput::is_wrapper_command(const std::string& command)
     {
-        return iequals(command, "select")
-            || iequals(command, "insert")
-            || iequals(command, "update")
-            || iequals(command, "delete")
-            || iequals(command, "create")
-            || iequals(command, "drop");
+        return iequals(command, "fselect")
+            || iequals(command, "finsert")
+            || iequals(command, "fupdate")
+            || iequals(command, "fdelete")
+            || iequals(command, "fcreate")
+            || iequals(command, "fdrop");
     }
 
     std::string QueryInput::read(int argc, char** argv, std::istream& input)
@@ -52,7 +52,7 @@ namespace fsql
             const auto command = executable_name(argc > 0 ? argv[0] : nullptr);
             if (is_wrapper_command(command))
             {
-                query = command + " " + query;
+                query = command.substr(1) + " " + query;
             }
             return query;
         }

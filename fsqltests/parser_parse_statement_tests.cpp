@@ -285,6 +285,25 @@ TEST_CASE("parses quoted file paths everywhere table or view references are acce
     CHECK_EQ(drop_view.drop.table_name.name, "tmp/views/open_tasks.view.sql");
 }
 
+TEST_CASE("parses explicit unquoted table format references")
+{
+    const auto create_table = fsql_test::parse_statement("CREATE TABLE tasks.json (title, done);");
+    CHECK_EQ(static_cast<int>(create_table.create.table_name.kind), static_cast<int>(fsql::RelationReference::Kind::FilePath));
+    CHECK_EQ(create_table.create.table_name.name, "tasks.json");
+
+    const auto insert_statement = fsql_test::parse_statement("INSERT INTO tasks.yaml VALUES ('Patch release', false);");
+    CHECK_EQ(static_cast<int>(insert_statement.insert.table_name.kind), static_cast<int>(fsql::RelationReference::Kind::FilePath));
+    CHECK_EQ(insert_statement.insert.table_name.name, "tasks.yaml");
+
+    const auto update_statement = fsql_test::parse_statement("UPDATE tasks.toml SET done = true;");
+    CHECK_EQ(static_cast<int>(update_statement.update.table_name.kind), static_cast<int>(fsql::RelationReference::Kind::FilePath));
+    CHECK_EQ(update_statement.update.table_name.name, "tasks.toml");
+
+    const auto drop_statement = fsql_test::parse_statement("DROP TABLE tasks.xml;");
+    CHECK_EQ(static_cast<int>(drop_statement.drop.table_name.kind), static_cast<int>(fsql::RelationReference::Kind::FilePath));
+    CHECK_EQ(drop_statement.drop.table_name.name, "tasks.xml");
+}
+
 TEST_CASE("parses select source subqueries with aliases")
 {
     const auto statement = fsql_test::parse_statement("SELECT t.title, defaults.category FROM tasks t, (SELECT category FROM settings) defaults WHERE t.category = defaults.category;");

@@ -23,12 +23,12 @@ set_target_properties(fsqlapp PROPERTIES OUTPUT_NAME fsql)
 
 # List of SQL commands for which wrappers will be created
 set(SQL_WRAPPER_COMMANDS
-    select
-    insert
-    update
-    delete
-    create
-    drop
+    fselect
+    finsert
+    fupdate
+    fdelete
+    fcreate
+    fdrop
 )
 
 # Create wrappers for each SQL command

@@ -3,20 +3,16 @@
 #include "FileStorageSupport.h"
 #include "StorageRegistry.h"
 
-#include <cstddef>
-#include <filesystem>
 #include <fstream>
-#include <string>
-#include <vector>
 
 namespace fsql
 {
-    /// @brief Persists tables in CSV files.
-    class CsvStorage final : public IStorage
+    /// @brief Persists tables in XML files.
+    class XmlStorage final : public IStorage
     {
     public:
-        CsvStorage();
-        explicit CsvStorage(std::filesystem::path root_directory);
+        XmlStorage();
+        explicit XmlStorage(std::filesystem::path root_directory);
 
         std::filesystem::path table_path(const RelationReference& table_name) const override;
         bool has_table(const RelationReference& table_name) const override;
@@ -31,15 +27,6 @@ namespace fsql
         void delete_view(const RelationReference& view_name) override;
         std::size_t column_index(const Table& table, const std::string& column) const override;
 
-        static std::filesystem::path resolve_table_source_path(std::filesystem::path path);
-        static std::filesystem::path resolve_view_source_path(std::filesystem::path path);
-        static Table load_table_from_path(std::filesystem::path path);
-        static Table describe_table_from_path(std::filesystem::path path);
-        static RowGenerator scan_table_from_path(std::filesystem::path path);
-        static ViewDefinition load_view_from_path(std::filesystem::path path);
-        static std::string escape_csv(const std::string& value);
-        static std::vector<std::string> parse_csv_line(const std::string& line);
-
     private:
         static Table load_table_from_stream(std::istream& input, const std::string& table_name);
         static Table describe_table_from_stream(std::istream& input, const std::string& table_name);
@@ -47,6 +34,6 @@ namespace fsql
         static void write_table_to_stream(std::ostream& output, const Table& table);
 
         FileStorageSupport storage_support_;
-        FSQL_AUTO_REGISTER_STORAGE(CsvStorage, ".csv");
+        FSQL_AUTO_REGISTER_STORAGE(XmlStorage, ".xml");
     };
 }

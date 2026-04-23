@@ -1,11 +1,10 @@
 # Features
 
 ## Planned
-- Add support for more filetypes:
-  - Xml, JSON, toml, yaml
-  - It should be supported to mix them wildly, csv shall be default
-  - CREATE TABLE should be able to support extension detection to automatically detect appropriate storage type
+- INSERT INTO ... SELECT ... for inserting query results into tables
+- The cross product of multiple tables in FROM shall yield null values for columns from empty tables instead of eliminating rows
 - Align default value syntax with SQL standard (e.g. DEFAULT 'value' instead of = 'value')
+- UPDATE original values through views for columns that directly map to source tables
 - JOINs, ALIAS, and more complex multi-table queries:
   - INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL OUTER JOIN
   - Table aliases in FROM and JOIN clauses
@@ -25,9 +24,14 @@
     - json_array, json_object, json_array_length, json_array_length, json_array_length, json_array_length, etc.
 - More powerful subqueries returning lists of values
   - Additional list-returning predicate forms and broader subquery semantics
-- Create SYNTAX.md with detailed syntax documentation since this project is not real SQL
+- Split syntax and execution model from README into separate files
 
 ## Completed
+- Multi-format file-backed tables:
+  - CSV remains the default table format for writes without an explicit extension
+  - Explicit table formats are supported for `CREATE TABLE`, `INSERT`, `UPDATE`, `DELETE`, `DROP TABLE`, and `SELECT` (for example `tasks.json`, `tasks.toml`, `tasks.yaml`, `tasks.xml`)
+  - Table references without an explicit extension auto-detect existing `.csv`, `.json`, `.toml`, `.yaml`/`.yml`, and `.xml` files
+  - Ambiguous table matches across multiple file formats now fail with an explicit error
 - VIEW commands as readonly virtual tables:
   - CREATE VIEW
   - DROP VIEW

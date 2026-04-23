@@ -1,7 +1,7 @@
 #include "SelectExecution.h"
 
 #include "ColumnMetadata.h"
-#include "CsvStorage.h"
+#include "FileStorage.h"
 #include "Parser.h"
 #include "SelectExecutionDetail.h"
 #include "SqlError.h"
@@ -116,13 +116,13 @@ namespace fsql::detail
             if (source.kind == SelectSource::Kind::FilePath)
             {
                 materialized.source_name = source.alias.value_or(default_select_source_name(source));
-                if (const auto* csv_storage = dynamic_cast<const CsvStorage*>(&storage))
+                if (const auto* file_storage = dynamic_cast<const FileStorage*>(&storage))
                 {
                     RelationReference reference;
                     reference.kind = RelationReference::Kind::FilePath;
                     reference.name = source.name;
-                    const bool has_table = csv_storage->has_table(reference);
-                    const bool has_view = csv_storage->has_view(reference);
+                    const bool has_table = file_storage->has_table(reference);
+                    const bool has_view = file_storage->has_view(reference);
                     if (has_table && has_view)
                     {
                         fail("Name collision between table and view: " + source.name);
@@ -135,7 +135,7 @@ namespace fsql::detail
                         return materialized;
                     }
 
-                    const auto table = csv_storage->describe_table(reference);
+                    const auto table = file_storage->describe_table(reference);
                     materialized.column_names.reserve(table.columns.size());
                     for (const auto& column : table.columns)
                     {
@@ -148,7 +148,7 @@ namespace fsql::detail
                     return materialized;
                 }
 
-                const auto table = CsvStorage::describe_table_from_path(source.name);
+                const auto table = FileStorage::describe_table_from_path(source.name);
                 materialized.column_names.reserve(table.columns.size());
                 for (const auto& column : table.columns)
                 {
@@ -156,7 +156,7 @@ namespace fsql::detail
                 }
                 materialized.rows = [path = source.name]()
                 {
-                    return CsvStorage::scan_table_from_path(path);
+                    return FileStorage::scan_table_from_path(path);
                 };
                 return materialized;
             }
@@ -213,9 +213,9 @@ namespace fsql::detail
         {
             if (source.kind == SelectSource::Kind::FilePath)
             {
-                if (const auto* csv_storage = dynamic_cast<const CsvStorage*>(&storage))
+                if (const auto* file_storage = dynamic_cast<const FileStorage*>(&storage))
                 {
-                    return !csv_storage->has_view({RelationReference::Kind::FilePath, source.name});
+                    return !file_storage->has_view({RelationReference::Kind::FilePath, source.name});
                 }
                 return true;
             }

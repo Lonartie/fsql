@@ -3,6 +3,8 @@
 #
 cmake_minimum_required (VERSION 3.12...3.31)
 
+set(CMAKE_CXX_STANDARD 20)
+
 project ("fsql")
 
 enable_testing()
@@ -11,3 +13,4 @@ enable_testing()
 add_subdirectory (fsqllib)
 add_subdirectory (fsql)
 add_subdirectory (fsqltests)
+add_subdirectory (fsqltools)

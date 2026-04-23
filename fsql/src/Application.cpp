@@ -1,8 +1,8 @@
 #include "Application.h"
 
 #include "ConsoleOutputWriter.h"
-#include "CsvStorage.h"
 #include "Executor.h"
+#include "FileStorage.h"
 #include "ParallelCoroExecutor.h"
 #include "Parser.h"
 #include "QueryInput.h"
@@ -29,7 +29,7 @@ namespace fsql
             Tokenizer tokenizer(query);
             Parser parser(tokenizer.tokenize());
             auto coro_executor = std::make_shared<ParallelCoroExecutor>();
-            Executor executor(std::make_shared<CsvStorage>(), coro_executor);
+            Executor executor(std::make_shared<FileStorage>(), coro_executor);
             ConsoleOutputWriter writer(coro_executor);
 
             const auto result = executor.execute(parser.parse_statement());
