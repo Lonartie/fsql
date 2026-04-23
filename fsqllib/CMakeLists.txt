@@ -1,5 +1,4 @@
-add_library(fsqllib STATIC
-    src/ColumnMetadata.cpp
+set(SOURCES src/ColumnMetadata.cpp
     src/ConsoleOutputWriter.cpp
     src/CsvStorage.cpp
     src/ExpressionValue.cpp
@@ -24,8 +23,10 @@ add_library(fsqllib STATIC
     src/YamlStorage.cpp
 )
 
+add_library(fsqllib STATIC ${SOURCES})
 target_include_directories(fsqllib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(fsqllib PRIVATE CTRACK_DISABLE)
 
-if (CMAKE_VERSION VERSION_GREATER 3.12)
-  set_property(TARGET fsqllib PROPERTY CXX_STANDARD 20)
-endif()
+add_library(fsqllib_track STATIC ${SOURCES})
+target_include_directories(fsqllib_track PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(fsqllib_track PRIVATE)

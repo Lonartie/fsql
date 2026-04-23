@@ -1,5 +1,6 @@
 #include "JsonStorage.h"
 
+#include "ColumnMetadata.h"
 #include "SqlError.h"
 #include "StorageFormatUtils.h"
 #include "StringUtils.h"
@@ -117,7 +118,7 @@ namespace fsql
 
     RowGenerator JsonStorage::scan_table(const RelationReference& table_name) const
     {
-        return storage_support_.scan_table(table_name, scan_table_from_file);
+        return storage_support_.scan_table(table_name, describe_table_from_stream, scan_table_from_file);
     }
 
     ViewDefinition JsonStorage::load_view(const RelationReference& view_name) const
@@ -128,6 +129,27 @@ namespace fsql
     void JsonStorage::save_table(const Table& table)
     {
         storage_support_.save_table(table, write_table_to_stream);
+    }
+
+    bool JsonStorage::supports_append(const RelationReference& table_name) const
+    {
+        return storage_support_.supports_append(table_name);
+    }
+
+    void JsonStorage::append_row(const RelationReference& table_name, const Table& table, const Row& row)
+    {
+        storage_support_.append_row(table_name, table, row);
+    }
+
+    std::string JsonStorage::next_auto_increment_value_for_insert(const RelationReference& table_name,
+                                                                  const Table& table,
+                                                                  std::size_t index) const
+    {
+        if (const auto next_value = storage_support_.read_next_auto_increment_value(table_name); next_value.has_value())
+        {
+            return *next_value;
+        }
+        return fsql::next_auto_increment_value(load_table(table_name), index);
     }
 
     void JsonStorage::save_view(const ViewDefinition& view)

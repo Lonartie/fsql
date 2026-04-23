@@ -408,7 +408,7 @@ namespace fsql
             fail("Cannot INSERT INTO view: " + relation_name(stmt.table_name));
         }
 
-        Table table = storage_->load_table(stmt.table_name);
+        Table table = storage_->describe_table(stmt.table_name);
         Row row(table.columns.size());
         std::vector<bool> assigned(table.columns.size(), false);
 
@@ -467,11 +467,10 @@ namespace fsql
 
         if (const auto auto_increment_index = auto_increment_column_index(table); auto_increment_index.has_value() && row[*auto_increment_index].empty())
         {
-            row[*auto_increment_index] = next_auto_increment_value(table, *auto_increment_index);
+            row[*auto_increment_index] = storage_->next_auto_increment_value_for_insert(stmt.table_name, table, *auto_increment_index);
         }
 
-        table.rows.push_back(std::move(row));
-        storage_->save_table(table);
+        storage_->append_row(stmt.table_name, table, row);
         return make_success_result(ExecutionResultKind::Insert, 1, "Inserted 1 row into '" + relation_name(stmt.table_name) + "'");
     }
 

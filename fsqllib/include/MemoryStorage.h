@@ -84,6 +84,12 @@ namespace fsql
         /// @param table Table to persist.
         void save_table(const Table& table) override;
 
+        bool supports_append(const RelationReference& table_name) const override;
+        void append_row(const RelationReference& table_name, const Table& table, const Row& row) override;
+        std::string next_auto_increment_value_for_insert(const RelationReference& table_name,
+                                                         const Table& table,
+                                                         std::size_t index) const override;
+
         /// @brief Saves a view definition into memory.
         /// @param view View definition to persist.
         void save_view(const ViewDefinition& view) override;

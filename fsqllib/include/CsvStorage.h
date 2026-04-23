@@ -26,6 +26,11 @@ namespace fsql
         RowGenerator scan_table(const RelationReference& table_name) const override;
         ViewDefinition load_view(const RelationReference& view_name) const override;
         void save_table(const Table& table) override;
+        bool supports_append(const RelationReference& table_name) const override;
+        void append_row(const RelationReference& table_name, const Table& table, const Row& row) override;
+        std::string next_auto_increment_value_for_insert(const RelationReference& table_name,
+                                                         const Table& table,
+                                                         std::size_t index) const override;
         void save_view(const ViewDefinition& view) override;
         void delete_table(const RelationReference& table_name) override;
         void delete_view(const RelationReference& view_name) override;

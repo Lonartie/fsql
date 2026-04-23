@@ -139,6 +139,47 @@ TEST_CASE("concrete storage implementations persist views directly")
     }
 }
 
+TEST_CASE("concrete storage implementations append rows without rewriting logical table state")
+{
+    for (const auto& storage_case : storage_cases)
+    {
+        SUBCASE(storage_case.name.c_str())
+        {
+            fsql_test::TemporaryDirectory temp_directory;
+            auto storage = storage_case.create(temp_directory.path);
+
+            fsql::Table table;
+            table.name = "tasks";
+            table.columns = {"id AUTO_INCREMENT", "title", "done DEFAULT(false)"};
+
+            storage->save_table(table);
+
+            const fsql::RelationReference reference{fsql::RelationReference::Kind::Identifier, "tasks"};
+            REQUIRE(storage->supports_append(reference));
+
+            auto schema = storage->describe_table(reference);
+            REQUIRE_EQ(storage->next_auto_increment_value_for_insert(reference, schema, 0), "1");
+            storage->append_row(reference, schema, {"1", "Patch release", "false"});
+
+            schema = storage->describe_table(reference);
+            REQUIRE_EQ(storage->next_auto_increment_value_for_insert(reference, schema, 0), "2");
+            storage->append_row(reference, schema, {"2", "Write docs", "true"});
+
+            const auto loaded = storage->load_table(reference);
+            REQUIRE_EQ(loaded.rows.size(), 2U);
+            CHECK_EQ(loaded.rows[0][0], "1");
+            CHECK_EQ(loaded.rows[0][1], "Patch release");
+            CHECK_EQ(loaded.rows[1][0], "2");
+            CHECK_EQ(loaded.rows[1][1], "Write docs");
+
+            const auto scanned_rows = materialize_rows(*storage, reference);
+            REQUIRE_EQ(scanned_rows.size(), 2U);
+            CHECK_EQ(scanned_rows[0][0], "1");
+            CHECK_EQ(scanned_rows[1][0], "2");
+        }
+    }
+}
+
 TEST_CASE("yaml storage supports explicit yml file paths")
 {
     fsql_test::TemporaryDirectory temp_directory;

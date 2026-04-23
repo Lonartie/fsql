@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoroTypes.h"
+#include "ColumnMetadata.h"
 #include "SqlTypes.h"
 
 #include <cstddef>
@@ -54,6 +55,39 @@ namespace fsql
         /// @brief Saves a table to storage.
         /// @param table Table to persist.
         virtual void save_table(const Table& table) = 0;
+
+        /// @brief Returns whether the storage can append rows without rewriting the whole table.
+        /// @param table_name Logical table name or explicit file path.
+        /// @return `true` when append-based inserts are supported.
+        virtual bool supports_append(const RelationReference& table_name) const
+        {
+            static_cast<void>(table_name);
+            return false;
+        }
+
+        /// @brief Appends a row to a persisted table without materializing the whole table when supported.
+        /// @param table_name Logical table name or explicit file path.
+        /// @param table Table schema metadata.
+        /// @param row Row to append.
+        virtual void append_row(const RelationReference& table_name, const Table& table, const Row& row)
+        {
+            auto loaded = load_table(table_name);
+            loaded.rows.push_back(row);
+            save_table(loaded);
+        }
+
+        /// @brief Returns the next AUTO_INCREMENT value for a table column.
+        /// @param table_name Logical table name or explicit file path.
+        /// @param table Table schema metadata.
+        /// @param index AUTO_INCREMENT column index.
+        /// @return Next generated value.
+        virtual std::string next_auto_increment_value_for_insert(const RelationReference& table_name,
+                                                                 const Table& table,
+                                                                 std::size_t index) const
+        {
+            static_cast<void>(table);
+            return next_auto_increment_value(load_table(table_name), index);
+        }
 
         /// @brief Saves a view definition to storage.
         /// @param view View to persist.

@@ -101,6 +101,23 @@ namespace fsql::detail
         return escaped;
     }
 
+    std::string serialize_quoted_string_array(const std::vector<std::string>& values)
+    {
+        std::string text = "[";
+        for (std::size_t i = 0; i < values.size(); ++i)
+        {
+            if (i > 0)
+            {
+                text += ", ";
+            }
+            text += '"';
+            text += quoted_string_body(values[i]);
+            text += '"';
+        }
+        text += ']';
+        return text;
+    }
+
     std::vector<std::string> parse_quoted_string_array(const std::string& text, const std::string& message)
     {
         std::vector<std::string> values;

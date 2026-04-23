@@ -2,6 +2,7 @@
 
 #include "ColumnMetadata.h"
 #include "SqlError.h"
+#include "StorageFormatUtils.h"
 #include "StringUtils.h"
 
 #include <algorithm>
@@ -13,6 +14,42 @@ namespace fsql
     namespace
     {
         constexpr std::string_view view_suffix = ".view.sql";
+
+        RowGenerator scan_rows(std::vector<Row> rows)
+        {
+            for (const auto& row : rows)
+            {
+                co_yield row;
+            }
+        }
+
+        RowGenerator scan_with_append_journal(RowGenerator base_rows,
+                                             std::filesystem::path journal_path,
+                                             std::size_t column_count,
+                                             std::string table_name)
+        {
+            for (const auto& row : base_rows)
+            {
+                co_yield row;
+            }
+
+            std::ifstream input(journal_path);
+            if (!input)
+            {
+                co_return;
+            }
+
+            std::string line;
+            while (std::getline(input, line))
+            {
+                auto row = detail::parse_quoted_string_array(line, "Malformed appended row journal for table: " + table_name);
+                if (row.size() != column_count)
+                {
+                    fail("Row column count mismatch in table: " + table_name);
+                }
+                co_yield row;
+            }
+        }
 
         std::string describe_ambiguous_candidates(const std::vector<std::filesystem::path>& candidates)
         {
@@ -86,7 +123,8 @@ namespace fsql
 
         auto table = reader(input, table_name.name);
         table.storage_path = path;
-        return table;
+        append_journal_rows(table, path);
+        return detail::validate_loaded_table(std::move(table));
     }
 
     Table FileStorageSupport::describe_table(const RelationReference& table_name, const TableReader& reader) const
@@ -104,15 +142,27 @@ namespace fsql
         return table;
     }
 
-    RowGenerator FileStorageSupport::scan_table(const RelationReference& table_name, const TableScanner& scanner) const
+    RowGenerator FileStorageSupport::scan_table(const RelationReference& table_name,
+                                                const TableReader& reader,
+                                                const TableScanner& scanner) const
     {
         const auto path = resolve_table_path(table_name, false);
+        std::ifstream metadata_input(path, std::ios::binary);
+        if (!metadata_input)
+        {
+            fail("Table does not exist: " + table_name.name);
+        }
+        const auto table = reader(metadata_input, table_name.name);
+
         std::ifstream input(path, std::ios::binary);
         if (!input)
         {
             fail("Table does not exist: " + table_name.name);
         }
-        return scanner(std::move(input), table_name.name);
+        return scan_with_append_journal(scanner(std::move(input), table_name.name),
+                                        append_journal_path(path),
+                                        table.columns.size(),
+                                        table_name.name);
     }
 
     ViewDefinition FileStorageSupport::load_view(const RelationReference& view_name) const
@@ -163,6 +213,50 @@ namespace fsql
             fail("Unable to write table: " + table.name);
         }
         writer(output, table);
+
+        std::error_code error;
+        std::filesystem::remove(append_journal_path(path), error);
+        rewrite_auto_increment_state(path, table);
+    }
+
+    bool FileStorageSupport::supports_append(const RelationReference& table_name) const
+    {
+        return has_table(table_name);
+    }
+
+    void FileStorageSupport::append_row(const RelationReference& table_name, const Table& table, const Row& row) const
+    {
+        if (row.size() != table.columns.size())
+        {
+            fail("INSERT value count does not match table column count");
+        }
+
+        const auto path = resolve_table_path(table_name, false);
+        std::ofstream output(append_journal_path(path), std::ios::app | std::ios::binary);
+        if (!output)
+        {
+            fail("Unable to append row to table: " + table.name);
+        }
+        output << detail::serialize_quoted_string_array(row) << '\n';
+        advance_auto_increment_state(path, table, row);
+    }
+
+    std::optional<std::string> FileStorageSupport::read_next_auto_increment_value(const RelationReference& table_name) const
+    {
+        const auto path = resolve_table_path(table_name, false);
+        std::ifstream input(auto_increment_state_path(path));
+        if (!input)
+        {
+            return std::nullopt;
+        }
+
+        std::string value;
+        std::getline(input, value);
+        if (value.empty())
+        {
+            return std::nullopt;
+        }
+        return value;
     }
 
     void FileStorageSupport::save_view(const ViewDefinition& view) const
@@ -204,6 +298,10 @@ namespace fsql
         {
             fail("Unable to delete table: " + table_name.name);
         }
+
+        std::error_code error;
+        std::filesystem::remove(append_journal_path(path), error);
+        std::filesystem::remove(auto_increment_state_path(path), error);
     }
 
     void FileStorageSupport::delete_view(const RelationReference& view_name) const
@@ -405,6 +503,79 @@ namespace fsql
             }
         }
         return candidates;
+    }
+
+    std::filesystem::path FileStorageSupport::append_journal_path(const std::filesystem::path& table_path) const
+    {
+        return std::filesystem::path(table_path.string() + ".fsql.append");
+    }
+
+    std::filesystem::path FileStorageSupport::auto_increment_state_path(const std::filesystem::path& table_path) const
+    {
+        return std::filesystem::path(table_path.string() + ".fsql.autoincrement");
+    }
+
+    void FileStorageSupport::append_journal_rows(Table& table, const std::filesystem::path& table_path) const
+    {
+        std::ifstream input(append_journal_path(table_path));
+        if (!input)
+        {
+            return;
+        }
+
+        std::string line;
+        while (std::getline(input, line))
+        {
+            auto row = detail::parse_quoted_string_array(line, "Malformed appended row journal for table: " + table.name);
+            if (row.size() != table.columns.size())
+            {
+                fail("Row column count mismatch in table: " + table.name);
+            }
+            table.rows.push_back(std::move(row));
+        }
+    }
+
+    void FileStorageSupport::rewrite_auto_increment_state(const std::filesystem::path& table_path, const Table& table) const
+    {
+        std::error_code error;
+        if (const auto index = auto_increment_column_index(table); index.has_value())
+        {
+            std::ofstream output(auto_increment_state_path(table_path), std::ios::trunc);
+            if (!output)
+            {
+                fail("Unable to write AUTO_INCREMENT state for table: " + table.name);
+            }
+            output << next_auto_increment_value(table, *index);
+            return;
+        }
+        std::filesystem::remove(auto_increment_state_path(table_path), error);
+    }
+
+    void FileStorageSupport::advance_auto_increment_state(const std::filesystem::path& table_path,
+                                                          const Table& table,
+                                                          const Row& row) const
+    {
+        if (const auto index = auto_increment_column_index(table); index.has_value())
+        {
+            if (row.size() <= *index || row[*index].empty())
+            {
+                return;
+            }
+            try
+            {
+                std::ofstream output(auto_increment_state_path(table_path), std::ios::trunc);
+                if (!output)
+                {
+                    fail("Unable to write AUTO_INCREMENT state for table: " + table.name);
+                }
+                output << (std::stoll(row[*index]) + 1);
+                return;
+            }
+            catch (const std::exception&)
+            {
+                fail("AUTO_INCREMENT column requires numeric existing values");
+            }
+        }
     }
 }
 

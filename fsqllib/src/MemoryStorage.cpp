@@ -82,6 +82,34 @@ namespace fsql
         tables_[table.name] = table;
     }
 
+    bool MemoryStorage::supports_append(const RelationReference& table_name) const
+    {
+        return has_table(table_name);
+    }
+
+    void MemoryStorage::append_row(const RelationReference& table_name, const Table& table, const Row& row)
+    {
+        const auto it = tables_.find(table_name.name);
+        if (it == tables_.end())
+        {
+            fail("Table does not exist: " + table_name.name);
+        }
+
+        if (row.size() != table.columns.size())
+        {
+            fail("INSERT value count does not match table column count");
+        }
+        it->second.rows.push_back(row);
+    }
+
+    std::string MemoryStorage::next_auto_increment_value_for_insert(const RelationReference& table_name,
+                                                                    const Table& table,
+                                                                    std::size_t index) const
+    {
+        const auto loaded = load_table(table_name);
+        return next_auto_increment_value(loaded.rows.empty() ? table : loaded, index);
+    }
+
     void MemoryStorage::save_view(const ViewDefinition& view)
     {
         if (has_table({RelationReference::Kind::Identifier, view.name}))

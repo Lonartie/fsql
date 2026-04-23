@@ -282,6 +282,26 @@ namespace fsql
         default_storage(root_directory_)->save_table(table);
     }
 
+    bool FileStorage::supports_append(const RelationReference& table_name) const
+    {
+        const auto resolved_storage = resolve_existing_storage(table_name, root_directory_);
+        return resolved_storage.storage->supports_append(table_name);
+    }
+
+    void FileStorage::append_row(const RelationReference& table_name, const Table& table, const Row& row)
+    {
+        const auto resolved_storage = resolve_existing_storage(table_name, root_directory_);
+        resolved_storage.storage->append_row(table_name, table, row);
+    }
+
+    std::string FileStorage::next_auto_increment_value_for_insert(const RelationReference& table_name,
+                                                                  const Table& table,
+                                                                  std::size_t index) const
+    {
+        const auto resolved_storage = resolve_existing_storage(table_name, root_directory_);
+        return resolved_storage.storage->next_auto_increment_value_for_insert(table_name, table, index);
+    }
+
     void FileStorage::save_view(const ViewDefinition& view)
     {
         if (view.storage_path.has_value())
